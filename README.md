@@ -23,6 +23,20 @@ to install the CRAN version, simply use:
 install.packages("sts")
 ```
 
+You can install the most recent development version using the devtools package.  First you have 
+to install devtools using the following code.  Note that you only have to do this once
+```  
+if(!require(devtools)) install.packages("devtools")
+```   
+Then you can load the package and use the function `install_github`
+
+```
+library(devtools)
+install_github("mankad-research/sts_r",dependencies=TRUE)
+```
+
+Note that this will install all the packages suggested and required to run our package.  It may take a few minutes the first time, but this only needs to be done on the first use.  In the future you can update to the most recent development version using the same code. 
+
 ### Acknowledgements
 We want to thank our research assistant Nala Peng for her help in translating our original R code to C++.
 

@@ -1,4 +1,3 @@
-# sts_r
 ## sts: An R Package for the Structural Topic and Sentiment-Discourse Model
 
 Authors: [Shawn Mankad](http://mankad-research.github.io) and [Li Chen](https://business.cornell.edu/faculty-research/faculty/lc785/)

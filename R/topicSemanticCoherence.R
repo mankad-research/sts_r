@@ -23,7 +23,7 @@
 #' out <- prepDocuments(temp$documents, temp$vocab, temp$meta, verbose = FALSE)
 #' out$meta$noTreatment <- ifelse(out$meta$treatment == 1, -1, 1)
 #' ## low max iteration number just for testing
-#' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 2)
+#' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 2, verbose = FALSE)
 #' topicSemanticCoherence(sts_estimate, out)
 #' @export
 topicSemanticCoherence = function (object, corpus, M = 10) 

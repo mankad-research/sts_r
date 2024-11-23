@@ -17,7 +17,7 @@
 #' out_ho <- make.heldout(out$documents, out$vocab)
 #' out_ho$meta <- out$meta
 #' ## low max iteration number just for testing
-#' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out_ho, K = 3, maxIter = 2)
+#' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out_ho, K = 3, maxIter = 2, verbose = FALSE)
 #' heldoutLikelihood(sts_estimate, out_ho$missing)$expected.heldout
 #' @export
 heldoutLikelihood <- function (object, missing) 

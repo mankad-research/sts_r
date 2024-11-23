@@ -2,7 +2,7 @@ Package: sts
 Type: Package
 Title: Estimation of the Structural Topic and Sentiment-Discourse Model for Text Analysis
 Version: 1.2
-Date: 2024-11-21
+Date: 2024-11-23
 Author: Shawn Mankad [aut, cre], Li Chen [aut]
 Authors@R: c(person(given = "Shawn",
                       family = "Mankad",

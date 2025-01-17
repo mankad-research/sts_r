@@ -1,4 +1,4 @@
-#' Heldout Log-Likelihood
+#' Compute Heldout Log-Likelihood
 #' 
 #' Compute the heldout log-likelihood of the STS model
 #' 
@@ -8,7 +8,7 @@
 #' @return expected.heldout is the average of the held-out log-likelihood values 
 #' for each document.
 #' 
-#' @examples 
+#' @examples \donttest{
 #' library("tm"); library("stm"); library("sts")
 #' temp<-textProcessor(documents=gadarian$open.ended.response,
 #' metadata=gadarian, verbose = FALSE)
@@ -19,6 +19,7 @@
 #' ## low max iteration number just for testing
 #' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out_ho, K = 3, maxIter = 2, verbose = FALSE)
 #' heldoutLikelihood(sts_estimate, out_ho$missing)$expected.heldout
+#' }
 #' @export
 heldoutLikelihood <- function (object, missing) 
 {

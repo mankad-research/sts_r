@@ -2,7 +2,7 @@
 % Please edit documentation in R/topicSemanticCoherence.R
 \name{topicSemanticCoherence}
 \alias{topicSemanticCoherence}
-\title{Semantic Coherence}
+\title{Compute Semantic Coherence}
 \usage{
 topicSemanticCoherence(object, corpus, M = 10)
 }
@@ -10,7 +10,7 @@ topicSemanticCoherence(object, corpus, M = 10)
 \item{object}{Model output from sts}
 
 \item{corpus}{The document term matrix to be modeled in a sparse term count matrix with one row
-per document and one column per term. The object must be a list of with each element 
+per document and one column per term. The object must be a list of with each element
 corresponding to a document. Each document is represented
 as an integer matrix with two rows, and columns equal to the number of unique
 vocabulary words in the document.  The first row contains the 1-indexed
@@ -26,6 +26,7 @@ a numeric vector containing semantic coherence for each topic
 Calculates semantic coherence for an STS model.
 }
 \examples{
+\donttest{
 #An example using the Gadarian data from the stm package.  From Raw text to 
 # fitted model using textProcessor() which leverages the tm Package
 library("tm"); library("stm"); library("sts")
@@ -36,4 +37,5 @@ out$meta$noTreatment <- ifelse(out$meta$treatment == 1, -1, 1)
 ## low max iteration number just for testing
 sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 2, verbose = FALSE)
 topicSemanticCoherence(sts_estimate, out)
+}
 }

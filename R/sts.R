@@ -40,7 +40,7 @@
 #' shrinkage parameter using AIC. \code{"adjusted"} (default) utilizes the lasso penalty with an adjusted aggregated Poisson regression. 
 #' All options use an approximation framework developed in Taddy (2013) called
 #' Distributed Multinomial Regression which utilizes a factorized poisson
-#' approximation to the multinomial.  See Li and Mankad (forthcoming) on the implementation here.  
+#' approximation to the multinomial.  See Li and Mankad (2024) on the implementation here.  
 #' @param verbose A logical flag indicating whether information should be
 #' printed to the screen.  
 #' @param parallelize A logical flag indicating whether to parallelize the estimation using all but one CPU cores on your local machine. 
@@ -71,7 +71,7 @@
 #' experimentation in the social sciences" Journal of the American Statistical
 #' Association.
 #' 
-#' Chen L. and Mankad, S. (forthcoming) "A Structural Topic and Sentiment-Discourse Model
+#' Chen L. and Mankad, S. (2024) "A Structural Topic and Sentiment-Discourse Model
 #' for Text Analysis" Management Science.
 #' @examples
 #' #An example using the Gadarian data from the stm package.  From Raw text to 
@@ -82,7 +82,7 @@
 #' out <- prepDocuments(temp$documents, temp$vocab, temp$meta, verbose = FALSE)
 #' out$meta$noTreatment <- ifelse(out$meta$treatment == 1, -1, 1)
 #' ## low max iteration number just for testing
-#' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 2, verbose = FALSE)
+#' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 1, verbose = FALSE)
 #' @export
 sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "adjusted", verbose = TRUE, parallelize = FALSE, stmSeed = NULL) {
 

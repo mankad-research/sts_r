@@ -1,4 +1,4 @@
-#' Semantic Coherence
+#' Compute Semantic Coherence
 #' 
 #' Calculates semantic coherence for an STS model.
 #' 
@@ -14,7 +14,7 @@
 #' 
 #' @return a numeric vector containing semantic coherence for each topic
 #' 
-#' @examples 
+#' @examples \donttest{
 #' #An example using the Gadarian data from the stm package.  From Raw text to 
 #' # fitted model using textProcessor() which leverages the tm Package
 #' library("tm"); library("stm"); library("sts")
@@ -25,6 +25,7 @@
 #' ## low max iteration number just for testing
 #' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 2, verbose = FALSE)
 #' topicSemanticCoherence(sts_estimate, out)
+#' }
 #' @export
 topicSemanticCoherence = function (object, corpus, M = 10) 
 {

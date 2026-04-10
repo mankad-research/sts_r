@@ -1,4 +1,4 @@
-#' Function for printing top words that load heavily on each topic
+#' Print Top Words that Load Heavily on each Topic
 #' 
 #' Prints the top words for each document for low, average, and high levels of sentiment-discourse
 #' 
@@ -18,7 +18,6 @@
 #' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 2)
 #' printTopWords(sts_estimate)
 #' }
-#' @export printTopWords
 #' @export
 printTopWords = function(object, n = 10, lowerPercentile = 0.05, upperPercentile = 0.95) {
   mv <- object$mv
@@ -69,3 +68,4 @@ printTopWords = function(object, n = 10, lowerPercentile = 0.05, upperPercentile
   
   # return(1)        
 }
+

@@ -35,9 +35,9 @@
 #' the key experimental covariate identified in argument \code{initializationVar}. One can also use 
 #' \code{"stm"}, which uses a fitted STM model (Roberts et al. 2014, 2016) 
 #' to initialize coefficients related to prevalence and sentiment-discourse. 
-#' @param kappaEstimation A character input specifying how kappa should be estimated. \code{"lasso"} allows for 
+#' @param kappaEstimation A character input specifying how kappa should be estimated. \code{"lasso"} (default) allows for 
 #' penalties on the L1 norm.  We estimate a regularization path and then select the optimal
-#' shrinkage parameter using AIC. \code{"adjusted"} (default) utilizes the lasso penalty with an adjusted aggregated Poisson regression. 
+#' shrinkage parameter using AIC. \code{"adjusted"} utilizes the lasso penalty with an adjusted aggregated Poisson regression. 
 #' All options use an approximation framework developed in Taddy (2013) called
 #' Distributed Multinomial Regression which utilizes a factorized poisson
 #' approximation to the multinomial.  See Li and Mankad (2024) on the implementation here.  
@@ -84,7 +84,7 @@
 #' ## low max iteration number just for testing
 #' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 1, verbose = FALSE)
 #' @export
-sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "adjusted", verbose = TRUE, parallelize = FALSE, stmSeed = NULL) {
+sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL) {
 
   # if (!is.null(seed)) {set.seed(seed)}
   if(inherits(prevalence_sentiment,"formula")) {
@@ -143,11 +143,11 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
   D <- length(corpus$documents)
   V <- length(corpus$vocab)
   c_d_bar <- unlist(lapply(corpus$documents, function(x) sum(x[2,])))
-  wcountvec <- unlist(lapply(corpus$documents, function(x) rep(x[1,], times=x[2,])),use.names=FALSE)
-  wcounts <- table(wcountvec)
-  mv <- as.numeric(log(wcounts/sum(wcounts)))
+  wcounts <- tabulate(
+    unlist(lapply(corpus$documents, function(x) rep(x[1,], times=x[2,])), use.names=FALSE),
+    nbins = V)
+  mv <- log(wcounts / sum(wcounts))
   
-  K <- K
   if (verbose) {cat("\nStarting Initialization...")}
   
   
@@ -158,10 +158,11 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
                                     prevalence=~X, data=data.frame(X), max.em.its = 0, LDAbeta = FALSE))
   } else if (initialization == "stm") {
     ## stm initialization
-    mod.out <- stmSeed
     if (is.null(stmSeed))
       mod.out <- suppressWarnings(stm(corpus$documents, corpus$vocab, K, verbose = FALSE, content = X_seed,
                                       prevalence=~X, data=data.frame(X), max.em.its = 100, LDAbeta = FALSE))
+    else
+      mod.out <- stmSeed
   }
   
   if (verbose) {cat("Sigma, mu, and alpha...")}
@@ -197,7 +198,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     phi[[g]] <- matrix(data = 0, nrow = V, ncol = K)
   }  
   BZ <- t(exp(mod.out$beta$logbeta[[1]]))
-  BZ <- apply(BZ, 2, function(x) x / rowSums(BZ))
+  BZ <- BZ / rowSums(BZ)
   for (d in 1:D) {
     cdv_ind <- corpus$documents[[d]][1,]
     cdv <- corpus$documents[[d]][2,]
@@ -313,12 +314,11 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
         elbo <- elbo + infer$value + 0.5*(sum(log(diag(h.chol))) - log(det(sigma)))
         ###################################################### STOP ######################################################
   
-        expeta <- exp(c(infer$par[1:(K-1)],0))
-        theta <- expeta/sum(expeta)
+        theta <- softmax(c(infer$par[1:(K-1)], 0))
         for (k in 1:K) {
           BZ[,k] <- theta[k]*softmax(mv + kappa.est$kappa_t[,k] + kappa.est$kappa_s[,k] * alpha.est[d,K+k-1])
         }
-        BZ <- apply(BZ, 2, function(x) x / rowSums(BZ))
+        BZ <- BZ / rowSums(BZ)
         phi[[group[d]]][cdv_ind,] <- phi[[group[d]]][cdv_ind,] + cdv*BZ[cdv_ind,]
         phiD[d,] <- phiD[d,] + colSums(cdv*BZ[cdv_ind,, drop = FALSE])
 
@@ -365,12 +365,11 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
         
         cdv_ind <- corpus$documents[[d]][1,]
         cdv <- corpus$documents[[d]][2,]
-        expeta <- exp(c(infer$par[1:(K-1)], 0))
-        theta <- expeta / sum(expeta)
+        theta <- softmax(c(infer$par[1:(K-1)], 0))
         for (k in 1:K) {
           BZ[,k] <- theta[k] * softmax(mv + kappa.est$kappa_t[,k] + kappa.est$kappa_s[,k] * infer$par[K+k-1])
         }
-        BZ <- apply(BZ, 2, function(x) x / rowSums(BZ))
+        BZ <- BZ / rowSums(BZ)
         phi[[group[d]]][cdv_ind,] <- phi[[group[d]]][cdv_ind,] + cdv * BZ[cdv_ind,]
         phiD[d,] <- phiD[d,] + colSums(cdv*BZ[cdv_ind,, drop = FALSE])
       }
@@ -435,7 +434,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     iter <- iter + 1
   }
 
-  final.est <- list(alpha = alpha.est, gamma = Gamma.est, kappa = kappa.est, sigma_inv = Sigma_Inv.est, sigma = sigma, elbo = elbo_vec[1:iter], mv = mv, runtime = proc.time()[3] - timer_full, vocab = mod.out$vocab, mu = mu$mu)
+  final.est <- list(alpha = alpha.est, gamma = Gamma.est, kappa = kappa.est, sigma_inv = Sigma_Inv.est, sigma = sigma, elbo = elbo_vec[1:(iter-1)], mv = mv, runtime = proc.time()[3] - timer_full, vocab = mod.out$vocab, mu = mu$mu)
   if (parallelize) {
     # Stop the cluster when done
     parallel::stopCluster(cl)

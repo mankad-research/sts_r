@@ -1,4 +1,4 @@
-#' Function for plotting documents that load heavily on a topic
+#' Function for Identifying Documents that Load Heavily on a Topic
 #' 
 #' Extracts documents with the highest prevalence for a given topic
 #' 
@@ -19,7 +19,6 @@
 #' docs <- findRepresentativeDocs(sts_estimate, out$meta$open.ended.response, topic = 3, n = 4)
 #' plotRepresentativeDocs(docs, text.cex = 0.7, width = 100)
 #' }
-#' @export findRepresentativeDocs
 #' @export
 findRepresentativeDocs = function(object, corpus_text, topic, n = 3) {
   K <- (1 + ncol(object$alpha))/2

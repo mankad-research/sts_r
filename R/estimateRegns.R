@@ -84,7 +84,6 @@ estimateRegns = function(object, prevalence_sentiment, corpus) {
     r <- z$residuals
     f <- z$fitted.values
     
-    mss <- ifelse(attr(z$terms, "intercept"), sum((f - mean(f))^2), sum(f^2)) 
     rss <- sum(r^2)
     
     resvar <- rss/rdf

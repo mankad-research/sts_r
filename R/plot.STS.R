@@ -87,7 +87,7 @@ plot.STS <- function(x,
   index <- df$index
   words <- df$words
 
-  df$topic <- factor(df$topic, levels = paste0("Topic ", 1:10))
+  df$topic <- factor(df$topic, levels = paste0("Topic ", 1:K))
   
   df$Model <- factor(df$Model, levels = c("STS: Average", "STS: Negative", "STS: Positive"))
   

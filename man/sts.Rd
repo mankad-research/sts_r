@@ -12,7 +12,7 @@ sts(
   maxIter = 100,
   convTol = 1e-05,
   initialization = "anchor",
-  kappaEstimation = "adjusted",
+  kappaEstimation = "lasso",
   verbose = TRUE,
   parallelize = FALSE,
   stmSeed = NULL
@@ -47,9 +47,9 @@ the key experimental covariate identified in argument \code{initializationVar}. 
 \code{"stm"}, which uses a fitted STM model (Roberts et al. 2014, 2016)
 to initialize coefficients related to prevalence and sentiment-discourse.}
 
-\item{kappaEstimation}{A character input specifying how kappa should be estimated. \code{"lasso"} allows for
+\item{kappaEstimation}{A character input specifying how kappa should be estimated. \code{"lasso"} (default) allows for
 penalties on the L1 norm.  We estimate a regularization path and then select the optimal
-shrinkage parameter using AIC. \code{"adjusted"} (default) utilizes the lasso penalty with an adjusted aggregated Poisson regression.
+shrinkage parameter using AIC. \code{"adjusted"} utilizes the lasso penalty with an adjusted aggregated Poisson regression.
 All options use an approximation framework developed in Taddy (2013) called
 Distributed Multinomial Regression which utilizes a factorized poisson
 approximation to the multinomial.  See Li and Mankad (2024) on the implementation here.}

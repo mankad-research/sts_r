@@ -1,8 +1,8 @@
 Package: sts
 Type: Package
 Title: Estimation of the Structural Topic and Sentiment-Discourse Model for Text Analysis
-Version: 1.3
-Date: 2025-01-17
+Version: 1.5
+Date: 2026-04-10
 Author: Shawn Mankad [aut, cre], Li Chen [aut]
 Authors@R: c(person(given = "Shawn",
                       family = "Mankad",
@@ -17,9 +17,9 @@ Description: The Structural Topic and Sentiment-Discourse (STS) model allows res
 License: MIT + file LICENSE
 Imports:
     glmnet, matrixStats, slam, foreach, doParallel, parallel, stm, Matrix, mvtnorm, ggplot2, tm
-Suggests: knitr, rmarkdown
+Suggests: knitr, rmarkdown, R.rsp
 LinkingTo: Rcpp, RcppArmadillo
-VignetteBuilder: knitr
+VignetteBuilder: R.rsp
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.2.1

@@ -8,12 +8,25 @@ Please email all comments/questions to smankad [AT] ncsu.edu
 
 ### Summary
 
-This repository will host the development version of the package.  It is also available on CRAN. It estimates the Structural Topic and Sentiment-Discourse Model that was developed in [Chen and Mankad (2024)](https://pubsonline.informs.org/doi/10.1287/mnsc.2022.00261). 
+This repository will host the development version of the package.  It is also available on CRAN. It estimates the Structural Topic and Sentiment-Discourse Model that was developed in [Chen and Mankad (2025)](https://pubsonline.informs.org/doi/10.1287/mnsc.2022.00261). 
 
 The package currently includes functionality to:
+* prepare raw text for analysis (`textProcessor()`, `prepDocuments()`, `make.heldout()`)
 * estimate Structural Topic and Sentiment-Discourse Models
 * calculate covariate effects on latent topic prevalence and sentiment-discourse
 * create the main plots and tables for the estimation results
+
+As of version 1.6, sts no longer requires the [stm](https://github.com/bstewart/stm) package: the initialization routines and text-preparation helpers that sts previously borrowed from stm are now included in sts itself.
+
+### Quick Start
+```
+library(sts)
+temp <- textProcessor(documents = gadarian$open.ended.response, metadata = gadarian)
+out <- prepDocuments(temp$documents, temp$vocab, temp$meta)
+out$meta$noTreatment <- ifelse(out$meta$treatment == 1, -1, 1)
+fit <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3)
+printTopWords(fit)
+```
 
 ### Installation Instructions
 Assuming you already have R installed (if not see http://www.r-project.org/),
@@ -39,7 +52,4 @@ Note that this will install all the packages suggested and required to run the s
 ### Acknowledgements
 We want to thank our research assistant Nala Peng for her help in translating our original R code to C++.
 
-Our work, both the implementation and the theoretical development, builds on the foundational [stm](https://github.com/bstewart/stm) package.
-
-
-
+Our work, both the implementation and the theoretical development, builds on the foundational [stm](https://github.com/bstewart/stm) package by Margaret Roberts, Brandon Stewart and Dustin Tingley. Portions of their MIT-licensed code are adapted in sts (see `inst/COPYRIGHTS`).

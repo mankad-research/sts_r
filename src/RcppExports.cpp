@@ -55,8 +55,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // sts_optkappa_cpp
-Rcpp::List sts_optkappa_cpp(const Rcpp::List& phi_list, const arma::mat& abar, const arma::vec& mv, const arma::mat& kappa_t_old, const arma::mat& kappa_s_old, int nlambda, double lambda_min_ratio, double devmax, double tol, int cores);
-RcppExport SEXP _sts_sts_optkappa_cpp(SEXP phi_listSEXP, SEXP abarSEXP, SEXP mvSEXP, SEXP kappa_t_oldSEXP, SEXP kappa_s_oldSEXP, SEXP nlambdaSEXP, SEXP lambda_min_ratioSEXP, SEXP devmaxSEXP, SEXP tolSEXP, SEXP coresSEXP) {
+Rcpp::List sts_optkappa_cpp(const Rcpp::List& phi_list, const arma::mat& abar, const arma::vec& mv, const arma::mat& kappa_t_old, const arma::mat& kappa_s_old, int nlambda, double lambda_min_ratio, double devmax, double tol, int cores, double damping, int select, Rcpp::Nullable<Rcpp::NumericVector> lambda_fixed);
+RcppExport SEXP _sts_sts_optkappa_cpp(SEXP phi_listSEXP, SEXP abarSEXP, SEXP mvSEXP, SEXP kappa_t_oldSEXP, SEXP kappa_s_oldSEXP, SEXP nlambdaSEXP, SEXP lambda_min_ratioSEXP, SEXP devmaxSEXP, SEXP tolSEXP, SEXP coresSEXP, SEXP dampingSEXP, SEXP selectSEXP, SEXP lambda_fixedSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -70,7 +70,10 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type devmax(devmaxSEXP);
     Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
     Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
-    rcpp_result_gen = Rcpp::wrap(sts_optkappa_cpp(phi_list, abar, mv, kappa_t_old, kappa_s_old, nlambda, lambda_min_ratio, devmax, tol, cores));
+    Rcpp::traits::input_parameter< double >::type damping(dampingSEXP);
+    Rcpp::traits::input_parameter< int >::type select(selectSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type lambda_fixed(lambda_fixedSEXP);
+    rcpp_result_gen = Rcpp::wrap(sts_optkappa_cpp(phi_list, abar, mv, kappa_t_old, kappa_s_old, nlambda, lambda_min_ratio, devmax, tol, cores, damping, select, lambda_fixed));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -194,7 +197,7 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_sts_sts_logZ_probe", (DL_FUNC) &_sts_sts_logZ_probe, 8},
     {"_sts_sts_estep_cpp", (DL_FUNC) &_sts_sts_estep_cpp, 15},
-    {"_sts_sts_optkappa_cpp", (DL_FUNC) &_sts_sts_optkappa_cpp, 10},
+    {"_sts_sts_optkappa_cpp", (DL_FUNC) &_sts_sts_optkappa_cpp, 13},
     {"_sts_sts_poislasso_path_cpp", (DL_FUNC) &_sts_sts_poislasso_path_cpp, 7},
     {"_sts_stm_lhoodcpp", (DL_FUNC) &_sts_stm_lhoodcpp, 5},
     {"_sts_stm_gradcpp", (DL_FUNC) &_sts_stm_gradcpp, 5},

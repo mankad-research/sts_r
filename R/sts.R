@@ -264,6 +264,8 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
   ## of the log-posterior at its mode) and the Laplace term.  1.6 computed the
   ## total only; keeping the parts makes a declining bound diagnosable.
   elboObj_vec <- elboLap_vec <- rep(NA, maxIter)
+  trace_mu <- trace_kap <- matrix(NA_real_, maxIter, 3)
+  kappaLambda <- NULL
   ## best-bound tracking and the consecutive-decrease counter (see the
   ## convergence block below)
   best_elbo  <- -Inf
@@ -359,7 +361,29 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     sigma.chol <- chol(sigma)
     Sigma_Inv.est <- chol2inv(sigma.chol)
     
-    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, c_d_bar = c_d_bar, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, phiD =phiD, solver = kappaSolver, cores = cores)
+    ## Diagnostic trace (internal option sts.traceBound): the bound at fixed
+    ## alpha after each M-step update, so a decline can be attributed to the
+    ## mu/sigma update or to the kappa update. maxit = 0 evaluates without
+    ## re-optimising alpha.
+    traceB <- isTRUE(getOption("sts.traceBound", FALSE))
+    boundAt <- function(kap) {
+      r <- sts_estep_cpp(documents = corpus$documents, alpha_init = alpha.est,
+             kappa_t = kap$kappa_t, kappa_s = kap$kappa_s, mv = mv, mu = mu$mu,
+             Sigma_Inv = Sigma_Inv.est,
+             logdet_sigma = as.numeric(determinant(sigma, logarithm = TRUE)$modulus),
+             group = as.integer(group), numGroups = as.integer(numGroups),
+             maxit = 0L, logZMode = 0L, logZSpacing = logZSpacing,
+             logZMargin = logZMargin, cores = cores)
+      c(r$elbo, r$elboObj, r$elboLap)
+    }
+    if (traceB) trace_mu[iter, ] <- boundAt(kappa.est)
+
+    freezeAfter <- getOption("sts.kappaFreezeAfter", NULL)
+    lamFix <- if (!is.null(freezeAfter) && iter > freezeAfter) kappaLambda else NULL
+    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, c_d_bar = c_d_bar, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, phiD =phiD, solver = kappaSolver, cores = cores, lambda_fixed = lamFix)
+    if (is.null(lamFix)) kappaLambda <- attr(kappa.est, "lambda")
+
+    if (traceB) trace_kap[iter, ] <- boundAt(kappa.est)
     
     if(verbose) {
       #M-step message
@@ -478,6 +502,14 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     elboLap = elboLap_vec[1:(iter - 1)],
     achange = achange_vec[1:(iter - 1)],
     kchange = kchange_vec[1:(iter - 1)])
+  if (isTRUE(getOption("sts.traceBound", FALSE))) {
+    final.est$boundTrace <- data.frame(
+      iter = seq_len(iter - 1),
+      afterE = elbo_path,
+      afterMuSigma = trace_mu[1:(iter - 1), 1], afterKappa = trace_kap[1:(iter - 1), 1],
+      objAfterMuSigma = trace_mu[1:(iter - 1), 2], objAfterKappa = trace_kap[1:(iter - 1), 2],
+      lapAfterMuSigma = trace_mu[1:(iter - 1), 3], lapAfterKappa = trace_kap[1:(iter - 1), 3])
+  }
   final.est$bestIter <- if (allow.neg.change) length(elbo_path) else best_iter
   class(final.est) <- "STS"
 

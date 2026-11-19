@@ -42,7 +42,7 @@
   as.numeric(mod$beta[, which.min(ic)])
 }
 
-opt.kappa <- function(phi, alphaS, kappa, c_d_bar, estimation = estimation, numGroups, group, V, mv, phiD, solver = "cpp", cores = 1L) {
+opt.kappa <- function(phi, alphaS, kappa, c_d_bar, estimation = estimation, numGroups, group, V, mv, phiD, solver = "cpp", cores = 1L, lambda_fixed = NULL) {
   low <- -Inf
   upp <- Inf
   K   <- ncol(alphaS)
@@ -63,9 +63,16 @@ opt.kappa <- function(phi, alphaS, kappa, c_d_bar, estimation = estimation, numG
                             kappa_t_old = kappa$kappa_t,
                             kappa_s_old = kappa$kappa_s,
                             nlambda = 250L, lambda_min_ratio = 0.001,
-                            devmax = 0.999, tol = 1e-10, cores = cores)
+                            devmax = 0.999, tol = 1e-10, cores = cores,
+                            ## internal diagnostic options (not user-facing):
+                            ## weight on the old kappa, and penalty selection
+                            ## (0 = AIC as in 1.6, 1 = least-penalised point)
+                            damping = getOption("sts.kappaDamping", 0.5),
+                            select  = if (is.null(lambda_fixed)) as.integer(getOption("sts.kappaSelect", 0L)) else 2L,
+                            lambda_fixed = lambda_fixed)
     kappa$kappa_t <- res$kappa_t
     kappa$kappa_s <- res$kappa_s
+    attr(kappa, "lambda") <- res$lambda     # selected penalty per word
     return(kappa)
   }
   penalty.factor <- c(rep(1, K), rep(1, K))

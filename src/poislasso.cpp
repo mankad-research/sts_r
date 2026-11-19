@@ -204,22 +204,30 @@ struct OptKappaWorker : public RcppParallel::Worker {
   const arma::mat& kappa_s_old;
   const int nlambda;
   const double r, devmax, tol;
+  const double damping;                   // weight on the OLD kappa (1.6: 0.5)
+  const int select;                       // 0 = AIC (1.6), 1 = last path point,
+                                          // 2 = solve at a given lambda per word
+  const arma::vec& lambda_fixed;          // used when select == 2
   const int G;
   const arma::uword K;
   arma::mat& kt;
   arma::mat& ks;
   std::vector<double>& npath, &nsweep, &nnewton;
+  arma::vec& lambda_sel;                  // lambda at the selected point, per word
 
   OptKappaWorker(const std::vector<arma::mat>& phi_, const arma::mat& phi_sum_,
                  const arma::mat& abar_, const arma::vec& mv_,
                  const arma::mat& kto, const arma::mat& kso, int nlambda_,
-                 double r_, double devmax_, double tol_, int G_, arma::uword K_,
+                 double r_, double devmax_, double tol_, double damping_, int select_,
+                 const arma::vec& lambda_fixed_, int G_, arma::uword K_,
                  arma::mat& kt_, arma::mat& ks_, std::vector<double>& npath_,
-                 std::vector<double>& nsweep_, std::vector<double>& nnewton_)
+                 std::vector<double>& nsweep_, std::vector<double>& nnewton_,
+                 arma::vec& lambda_sel_)
     : phi(phi_), phi_sum(phi_sum_), abar(abar_), mv(mv_), kappa_t_old(kto),
       kappa_s_old(kso), nlambda(nlambda_), r(r_), devmax(devmax_), tol(tol_),
-      G(G_), K(K_), kt(kt_), ks(ks_), npath(npath_), nsweep(nsweep_),
-      nnewton(nnewton_) {}
+      damping(damping_), select(select_), lambda_fixed(lambda_fixed_), G(G_), K(K_),
+      kt(kt_), ks(ks_), npath(npath_), nsweep(nsweep_), nnewton(nnewton_),
+      lambda_sel(lambda_sel_) {}
 
   void operator()(std::size_t v0, std::size_t v1) {
     const int n = G * (int)K;
@@ -266,7 +274,15 @@ struct OptKappaWorker : public RcppParallel::Worker {
       double best_ic = std::numeric_limits<double>::infinity();
 
       double lambda = lambda_max;
+      double sel_lambda = lambda_max;
+      // select == 2: walk the usual grid down to the fixed lambda (for warm
+      // starts), then solve exactly there and take that point.
+      const double lam_fix = (select == 2) ? lambda_fixed[v] : 0.0;
+      bool fixed_done = false;
       for (int t = 0; t < nlambda; ++t, lambda *= r) {
+        if (select == 2 && (lambda <= lam_fix || t == nlambda - 1)) {
+          lambda = std::max(lam_fix, 0.0); fixed_done = true;
+        }
         double dev = 0.0;
         int df = 0;
         // lambda_max is, by definition, the smallest lambda at which every
@@ -276,7 +292,7 @@ struct OptKappaWorker : public RcppParallel::Worker {
         // lambda_max and the two can differ by an ulp, which on some words
         // let a ~1e-15 coefficient "enter" at the first point and moved the
         // AIC choice to the runner-up.
-        if (t == 0) { dev = nulldev; df = 0; }
+        if (t == 0 && !(select == 2 && fixed_done && lam_fix < lambda_max)) { dev = nulldev; df = 0; }
         else for (arma::uword k = 0; k < K; ++k) {
           const double* y = &yv[k * G];
           const double* E = &Ev[k * G];
@@ -293,23 +309,32 @@ struct OptKappaWorker : public RcppParallel::Worker {
         }
 
         const double ic = dev + 2.0 * (double)df;
-        if (ic < best_ic) {
-          best_ic = ic;
+        // select == 1 keeps the least-penalised point reached (diagnostic:
+        // removes the AIC-driven active-set changes between iterations)
+        if (select == 1 || (select == 2 && fixed_done) || (select == 0 && ic < best_ic)) {
+          best_ic = ic; sel_lambda = lambda;
           for (arma::uword k = 0; k < K; ++k) { bb1[k] = b1[k]; bb2[k] = b2[k]; }
         }
         ++np;
+        if (select == 2) { if (fixed_done) break; else continue; }
         // glmnet's truncation: stop after the first lambda whose dev.ratio
         // exceeds devmax. Guard nulldev == 0 (a word absent from every group).
         const double devratio = (nulldev > 0.0) ? 1.0 - dev / nulldev : 1.0;
         if (devratio > devmax) break;
       }
 
-      // ---- 1.6's damped update ----
+      // ---- damped update; damping = 0.5 reproduces 1.6's (coef + kappa)/2 ----
       for (arma::uword k = 0; k < K; ++k) {
-        kt(v, k) = 0.5 * (bb1[k] + kappa_t_old(v, k));
-        ks(v, k) = 0.5 * (bb2[k] + kappa_s_old(v, k));
+        if (damping == 0.5) {                 // keep 1.6's exact arithmetic
+          kt(v, k) = 0.5 * (bb1[k] + kappa_t_old(v, k));
+          ks(v, k) = 0.5 * (bb2[k] + kappa_s_old(v, k));
+        } else {
+          kt(v, k) = (1.0 - damping) * bb1[k] + damping * kappa_t_old(v, k);
+          ks(v, k) = (1.0 - damping) * bb2[k] + damping * kappa_s_old(v, k);
+        }
       }
       npath[v] = (double)np; nsweep[v] = (double)n_sweep; nnewton[v] = (double)n_newton;
+      lambda_sel[v] = sel_lambda;
     }
   }
 };
@@ -329,7 +354,10 @@ Rcpp::List sts_optkappa_cpp(const Rcpp::List& phi_list,
                             double lambda_min_ratio,
                             double devmax,
                             double tol,
-                            int cores = 1) {
+                            int cores = 1,
+                            double damping = 0.5,
+                            int select = 0,
+                            Rcpp::Nullable<Rcpp::NumericVector> lambda_fixed = R_NilValue) {
   const int G = phi_list.size();
   std::vector<arma::mat> phi(G);
   for (int g = 0; g < G; ++g) phi[g] = Rcpp::as<arma::mat>(phi_list[g]);
@@ -349,8 +377,15 @@ Rcpp::List sts_optkappa_cpp(const Rcpp::List& phi_list,
 
   arma::mat kt(V, K), ks(V, K);
   std::vector<double> npath(V), nsweep(V), nnewton(V);
+  arma::vec lam_fix(V, arma::fill::zeros), lam_sel(V, arma::fill::zeros);
+  if (select == 2) {
+    if (lambda_fixed.isNull()) Rcpp::stop("select = 2 needs lambda_fixed");
+    lam_fix = Rcpp::as<arma::vec>(lambda_fixed.get());
+    if (lam_fix.n_elem != V) Rcpp::stop("lambda_fixed must have length V");
+  }
   OptKappaWorker w(phi, phi_sum, abar, mv, kappa_t_old, kappa_s_old, nlambda,
-                   r, devmax, tol, G, K, kt, ks, npath, nsweep, nnewton);
+                   r, devmax, tol, damping, select, lam_fix, G, K, kt, ks,
+                   npath, nsweep, nnewton, lam_sel);
   RcppParallel::parallelFor(0, V, w, 16, cores);
 
   double tp = 0.0, ts = 0.0, tn = 0.0;
@@ -358,6 +393,7 @@ Rcpp::List sts_optkappa_cpp(const Rcpp::List& phi_list,
   return Rcpp::List::create(
     Rcpp::Named("kappa_t") = kt,
     Rcpp::Named("kappa_s") = ks,
+    Rcpp::Named("lambda") = lam_sel,
     Rcpp::Named("meanPath") = tp / (double)V,
     Rcpp::Named("sweepsPerSolve") = ts / (tp * (double)K),
     Rcpp::Named("newtonPerSolve") = tn / (tp * (double)K));

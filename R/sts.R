@@ -114,42 +114,12 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
   }
   
   if (parallelize) {
-    # Register the parallel backend
+    ## Only the kappa M-step still uses the foreach backend; the E-step is
+    ## threaded inside C++ (see src/estep.cpp).
     cl <- parallel::makeCluster(parallel::detectCores() - 1)
     doParallel::registerDoParallel(cl)
-    parallel::clusterExport(cl, varlist = c("lpbdcpp", "lgaecpp", "esthcpp"))
-    
-    # Function to handle each iteration of the loop
-    process_document <- function(d) {
-      cdv_ind <- corpus$documents[[d]][1,]
-      cdv <- corpus$documents[[d]][2,]
-      document <- corpus$documents[[d]]
-      
-      infer <- optim(par = alpha.est[d,], fn = lpbdcpp, gr = lgaecpp,
-                     method = "BFGS", control = list(fnscale = -1, maxit=500), hessian = FALSE,
-                     Sigma_Inv=Sigma_Inv.est,
-                     kappa_t=kappa.est$kappa_t, kappa_s=kappa.est$kappa_s, mu_d = mu$mu[,d], doc = document, V=V, mv = mv)
-      
-      hessian <- esthcpp(alpha_d = infer$par, kappa_t=kappa.est$kappa_t, kappa_s=kappa.est$kappa_s, Sigma_Inv = Sigma_Inv.est, doc = document, V=V, mv = mv)
-      h.chol <- tryCatch(expr = chol(hessian), error = function(x) return(NULL))
-      if (is.null(h.chol)) {
-        dvec <- diag(hessian)
-        magnitudes <- rowSums(abs(hessian)) - abs(dvec)
-        dvec <- mapply(max, dvec, magnitudes)
-        diag(hessian) <- dvec
-        h.chol <- chol(hessian)
-      }
-      sigma.ss <- chol2inv(h.chol)
-      elbo <- infer$value + 0.5*(sum(log(diag(h.chol))) - log(det(sigma)))
-      
-      # if(verbose && d%%ctevery==0) cat(".")
-      
-      list(sigma.ss = sigma.ss, elbo = elbo, infer = infer)
-    }
-    
-    
-    
   }
+
 
   conv_criteria <- convTol
   topicreportevery <- 10
@@ -243,119 +213,43 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     t1 <- proc.time()[3]
     alpha.est.old <- alpha.est ## DEBUG
     kappa.est.old <- kappa.est ## DEBUG
-    sigma.ss <- diag(0, nrow=2*K-1)
-    phi <- vector("list", length = numGroups)
-    phiD <- matrix(0, nrow=D, ncol = K)
-    for (g in 1:numGroups) {
-      phi[[g]] <- matrix(data = 0, nrow = V, ncol = K)
-    }  
-    elbo <- 0      
-    BZ <- matrix(0, V, K)
-    ctevery <- ifelse(D>100, floor(D/100), 1)
-    
-    if (!parallelize) {
-      for (d in 1:D) {
-        ###################################################### THIS CODE CAN BE OPTIMIZED IN C++ ######################################################
-        cdv_ind <- corpus$documents[[d]][1,]
-        cdv <- corpus$documents[[d]][2,]
-        document <- corpus$documents[[d]]
-        # if (cpp) {
-          infer <- optim(par = alpha.est[d,], fn = lpbdcpp, gr = lgaecpp,
-                         method = "BFGS", control = list(fnscale = -1, maxit=500), hessian = FALSE,
-                         Sigma_Inv=Sigma_Inv.est,
-                         kappa_t=kappa.est$kappa_t, kappa_s=kappa.est$kappa_s, mu_d = mu$mu[,d], doc = document, V=V, mv = mv
-          )
-        # }
-        # else {
-        #   infer <- optim(par = alpha.est[d,], fn = log_posterior_byDoc.optim, gr = lapl_grad_alpha_eta.optim,
-        #                  method = "BFGS", control = list(fnscale = -1, maxit=500), hessian = FALSE,
-        #                  Gamma=Gamma.est, Sigma_Inv=Sigma_Inv.est,
-        #                  kappa=kappa.est, mu_d = mu$mu[,d], doc = document, V=V, mv = mv
-        #   )
-        # }
-        alpha.est[d,] <- infer$par
-        # if (cpp) {
-          hessian <- esthcpp(alpha_d = infer$par, kappa_t=kappa.est$kappa_t, kappa_s=kappa.est$kappa_s, Sigma_Inv = Sigma_Inv.est, doc = document, V=V, mv = mv)
-        # }
-        # else{
-          # hessian <- estimateHessian(alpha.d = infer$par, kappa = kappa.est, Sigma_Inv = Sigma_Inv.est, doc = document, V=V, mv = mv)
-        # }
-        h.chol <-  tryCatch(expr = chol(hessian), error = function(x) return(NULL))
-        if(is.null(h.chol)){
-          dvec <- diag(hessian)
-          magnitudes <- rowSums(abs(hessian)) - abs(dvec)
-          dvec <- mapply(max, dvec, magnitudes)
-          diag(hessian) <- dvec
-          h.chol <-  chol(hessian)
-        }
-        sigma.ss <- sigma.ss + chol2inv(h.chol)
-        elbo <- elbo + infer$value + 0.5*(sum(log(diag(h.chol))) - log(det(sigma)))
-        ###################################################### STOP ######################################################
-  
-        theta <- softmax(c(infer$par[1:(K-1)], 0))
-        for (k in 1:K) {
-          BZ[,k] <- theta[k]*softmax(mv + kappa.est$kappa_t[,k] + kappa.est$kappa_s[,k] * alpha.est[d,K+k-1])
-        }
-        BZ <- BZ / rowSums(BZ)
-        phi[[group[d]]][cdv_ind,] <- phi[[group[d]]][cdv_ind,] + cdv*BZ[cdv_ind,]
-        phiD[d,] <- phiD[d,] + colSums(cdv*BZ[cdv_ind,, drop = FALSE])
+    sigma.ss <- diag(0, nrow = 2*K-1)
+    elbo <- 0
 
-        if(verbose && d%%ctevery==0) cat(".")
-      }
-  
-      # print(summary(diff))
-      if(verbose) {
-        if(verbose) cat("\n") #add a line break for the next message.
-        msg <- sprintf("Completed E-Step (%d seconds). \n", floor((proc.time()-t1)[3]))
-        cat(msg)
-      }
-    } else {
-      if(verbose) {
-        cat("Starting E-step...")
-      }
-      
-      
-      
-      
-      # Use foreach for parallel processing
-      i = 1
-      results <- foreach(i = 1:D) %dopar% {
-        # dyn.load("STS")
-        process_document(i)
-      }
-      
-      
-      # Parallelize using mclapply
-      # results <- mclapply(1:D, process_document, mc.cores = detectCores() - 1)
-      
-      # Create a cluster using available cores
-      # cl <- makeCluster(detectCores() - 1)
-      # clusterExport(cl, varlist = c("out", "alpha.est", "lpbdcpp", "lgaecpp", "Sigma_Inv.est", "kappa.est", "mu", "V", "mv", "process_document", "esthcpp", "sigma"))
-      # results <- parLapply(cl, 1:D, process_document)
-      # stopCluster(cl)
-      
-      # Aggregate results
-      for (d in 1:D) {
-        sigma.ss <- sigma.ss + results[[d]]$sigma.ss
-        elbo <- elbo + results[[d]]$elbo
-        infer <- results[[d]]$infer
-        alpha.est[d,] <- infer$par
-        
-        cdv_ind <- corpus$documents[[d]][1,]
-        cdv <- corpus$documents[[d]][2,]
-        theta <- softmax(c(infer$par[1:(K-1)], 0))
-        for (k in 1:K) {
-          BZ[,k] <- theta[k] * softmax(mv + kappa.est$kappa_t[,k] + kappa.est$kappa_s[,k] * infer$par[K+k-1])
-        }
-        BZ <- BZ / rowSums(BZ)
-        phi[[group[d]]][cdv_ind,] <- phi[[group[d]]][cdv_ind,] + cdv * BZ[cdv_ind,]
-        phiD[d,] <- phiD[d,] + colSums(cdv*BZ[cdv_ind,, drop = FALSE])
-      }
-      if(verbose) {
-        # if(verbose) cat("\n") #add a line break for the next message.
-        msg <- sprintf("Completed E-Step (%d seconds). \n", floor((proc.time()-t1)[3]))
-        cat(msg)
-      }
+    ## ----------------------------- E-step -----------------------------
+    ## The entire per-document loop runs in C++ (src/estep.cpp): BFGS via a
+    ## port of R's vmmin, the Hessian, the Cholesky fix-up and the phi
+    ## accumulation.  Relative to 1.6 this forms only the document's own
+    ## rows, computes beta once for the objective and gradient instead of
+    ## twice, builds mv + kappa_t once per E-step instead of once per
+    ## objective call, and reuses beta_bar for phi (1.6 recomputed a full
+    ## V x K softmax in R for it).  All of these are algebraic
+    ## rearrangements: results match 1.6 up to floating-point
+    ## reassociation.
+    estep <- sts_estep_cpp(
+      documents    = corpus$documents,
+      alpha_init   = alpha.est,
+      kappa_t      = kappa.est$kappa_t,
+      kappa_s      = kappa.est$kappa_s,
+      mv           = mv,
+      mu           = mu$mu,
+      Sigma_Inv    = Sigma_Inv.est,
+      ## determinant(logarithm = TRUE) rather than 1.6's log(det(sigma)),
+      ## which underflows to -Inf for large K.
+      logdet_sigma = as.numeric(determinant(sigma, logarithm = TRUE)$modulus),
+      group        = as.integer(group),
+      numGroups    = as.integer(numGroups),
+      maxit        = 500L)
+
+    alpha.est <- estep$alpha
+    sigma.ss  <- estep$sigma_ss
+    elbo      <- estep$elbo
+    phi       <- estep$phi
+    phiD      <- estep$phiD
+
+    if (verbose) {
+      cat(sprintf("Completed E-Step (%d seconds). \n",
+                  floor((proc.time() - t1)[3])))
     }
     t1 <- proc.time()
     

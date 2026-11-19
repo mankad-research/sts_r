@@ -11,6 +11,27 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// sts_estep_cpp
+Rcpp::List sts_estep_cpp(const Rcpp::List& documents, const arma::mat& alpha_init, const arma::mat& kappa_t, const arma::mat& kappa_s, const arma::vec& mv, const arma::mat& mu, const arma::mat& Sigma_Inv, double logdet_sigma, const arma::uvec& group, int numGroups, int maxit);
+RcppExport SEXP _sts_sts_estep_cpp(SEXP documentsSEXP, SEXP alpha_initSEXP, SEXP kappa_tSEXP, SEXP kappa_sSEXP, SEXP mvSEXP, SEXP muSEXP, SEXP Sigma_InvSEXP, SEXP logdet_sigmaSEXP, SEXP groupSEXP, SEXP numGroupsSEXP, SEXP maxitSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type documents(documentsSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type alpha_init(alpha_initSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type kappa_t(kappa_tSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type kappa_s(kappa_sSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type mv(mvSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type Sigma_Inv(Sigma_InvSEXP);
+    Rcpp::traits::input_parameter< double >::type logdet_sigma(logdet_sigmaSEXP);
+    Rcpp::traits::input_parameter< const arma::uvec& >::type group(groupSEXP);
+    Rcpp::traits::input_parameter< int >::type numGroups(numGroupsSEXP);
+    Rcpp::traits::input_parameter< int >::type maxit(maxitSEXP);
+    rcpp_result_gen = Rcpp::wrap(sts_estep_cpp(documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma_Inv, logdet_sigma, group, numGroups, maxit));
+    return rcpp_result_gen;
+END_RCPP
+}
 // stm_lhoodcpp
 double stm_lhoodcpp(SEXP eta, SEXP beta, SEXP doc_ct, SEXP mu, SEXP siginv);
 RcppExport SEXP _sts_stm_lhoodcpp(SEXP etaSEXP, SEXP betaSEXP, SEXP doc_ctSEXP, SEXP muSEXP, SEXP siginvSEXP) {
@@ -112,6 +133,7 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_sts_sts_estep_cpp", (DL_FUNC) &_sts_sts_estep_cpp, 11},
     {"_sts_stm_lhoodcpp", (DL_FUNC) &_sts_stm_lhoodcpp, 5},
     {"_sts_stm_gradcpp", (DL_FUNC) &_sts_stm_gradcpp, 5},
     {"_sts_stm_hpbcpp", (DL_FUNC) &_sts_stm_hpbcpp, 6},

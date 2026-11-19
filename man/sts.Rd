@@ -15,7 +15,12 @@ sts(
   kappaEstimation = "lasso",
   verbose = TRUE,
   parallelize = FALSE,
-  stmSeed = NULL
+  stmSeed = NULL,
+  logZ = c("auto", "exact", "interpolated"),
+  logZSpacing = 0.01,
+  logZMargin = 2,
+  allow.neg.change = FALSE,
+  patience = 1L
 )
 }
 \arguments{
@@ -71,6 +76,50 @@ printed to the screen.}
 \item{stmSeed}{A prefit STM model object (e.g., from \code{stm::stm()} with
 \code{initializationVar} as the content covariate) to initialize the STS model.
 Note this is ignored unless initialization = "stm"}
+
+\item{logZ}{How each topic's log-partition function
+\eqn{\log Z_k(a) = \log \sum_v \exp(mv_v + \kappa_{t[v,k]} + \kappa_{s[v,k]} a)}
+is evaluated in the E-step. Within an E-step this is a fixed one-dimensional
+function of the scalar latent sentiment-discourse value, shared by every
+document, and it is the only part of the objective, gradient and Hessian that
+requires a sum over the whole vocabulary. \code{"exact"} sums over all
+\eqn{V} words on every evaluation, as in sts 1.6. \code{"interpolated"}
+tabulates \eqn{\log Z_k} together with its first two derivatives once per
+E-step and uses quintic Hermite interpolation thereafter, which reduces the
+per-document cost from \eqn{O(VK)} to \eqn{O(n_d K)} for a document with
+\eqn{n_d} distinct words. Values falling outside the tabulated range are
+evaluated exactly, so no value is ever extrapolated. The default,
+\code{"auto"}, uses the table when the corpus is large enough for it to pay
+off and the exact sum otherwise.}
+
+\item{logZSpacing}{Grid spacing for \code{logZ = "interpolated"}; default
+0.01. Accuracy is not monotone in this value: the interpolated second
+derivative divides by the square of the spacing, so very fine grids
+eventually lose accuracy to rounding. 0.01 is near the optimum, and 0.02 is
+slightly faster with essentially the same typical accuracy.}
+
+\item{logZMargin}{How far beyond the observed range of latent
+sentiment-discourse values to tabulate, in the same units; default 2. Larger
+values trade more grid nodes for fewer exact fallbacks and do not change
+accuracy.}
+
+\item{allow.neg.change}{Logical. sts 1.6 and earlier used
+\code{delta < convTol} as the convergence test, so any decrease in the ELBO,
+however large, counted as convergence; on the Gadarian data this stopped 3 of
+4 test fits. The default \code{FALSE} instead tracks the best bound seen and
+returns that iterate, stopping once the bound has decreased for
+\code{patience} consecutive iterations or has stopped changing by more than
+\code{convTol}. This can only improve on the bound the old rule returned from
+the same stopping point. \code{TRUE} restores the 1.6 behaviour exactly --
+stop at the first decrease and return the last iterate -- for reproducing
+results from sts 1.6 or earlier.}
+
+\item{patience}{Number of consecutive iterations with a decreasing ELBO
+tolerated before stopping, when \code{allow.neg.change = FALSE}; default 1.
+Note that the bound is not guaranteed to increase monotonically for this
+model: on the Gadarian data it rises to a single interior maximum and then
+declines for as long as the fit is allowed to run, so large values of
+\code{patience} cost time without improving the returned fit.}
 }
 \value{
 An object of class sts

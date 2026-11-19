@@ -56,7 +56,46 @@
 #' @param stmSeed A prefit STM model object (e.g., from \code{stm::stm()} with 
 #' \code{initializationVar} as the content covariate) to initialize the STS model. 
 #' Note this is ignored unless initialization = "stm"
-#' @return An object of class sts 
+#' @param logZ How each topic's log-partition function
+#' \eqn{\log Z_k(a) = \log \sum_v \exp(mv_v + \kappa_{t[v,k]} + \kappa_{s[v,k]} a)}
+#' is evaluated in the E-step. Within an E-step this is a fixed one-dimensional
+#' function of the scalar latent sentiment-discourse value, shared by every
+#' document, and it is the only part of the objective, gradient and Hessian that
+#' requires a sum over the whole vocabulary. \code{"exact"} sums over all
+#' \eqn{V} words on every evaluation, as in sts 1.6. \code{"interpolated"}
+#' tabulates \eqn{\log Z_k} together with its first two derivatives once per
+#' E-step and uses quintic Hermite interpolation thereafter, which reduces the
+#' per-document cost from \eqn{O(VK)} to \eqn{O(n_d K)} for a document with
+#' \eqn{n_d} distinct words. Values falling outside the tabulated range are
+#' evaluated exactly, so no value is ever extrapolated. The default,
+#' \code{"auto"}, uses the table when the corpus is large enough for it to pay
+#' off and the exact sum otherwise.
+#' @param logZSpacing Grid spacing for \code{logZ = "interpolated"}; default
+#' 0.01. Accuracy is not monotone in this value: the interpolated second
+#' derivative divides by the square of the spacing, so very fine grids
+#' eventually lose accuracy to rounding. 0.01 is near the optimum, and 0.02 is
+#' slightly faster with essentially the same typical accuracy.
+#' @param logZMargin How far beyond the observed range of latent
+#' sentiment-discourse values to tabulate, in the same units; default 2. Larger
+#' values trade more grid nodes for fewer exact fallbacks and do not change
+#' accuracy.
+#' @param allow.neg.change Logical. sts 1.6 and earlier used
+#' \code{delta < convTol} as the convergence test, so any decrease in the ELBO,
+#' however large, counted as convergence; on the Gadarian data this stopped 3 of
+#' 4 test fits. The default \code{FALSE} instead tracks the best bound seen and
+#' returns that iterate, stopping once the bound has decreased for
+#' \code{patience} consecutive iterations or has stopped changing by more than
+#' \code{convTol}. This can only improve on the bound the old rule returned from
+#' the same stopping point. \code{TRUE} restores the 1.6 behaviour exactly --
+#' stop at the first decrease and return the last iterate -- for reproducing
+#' results from sts 1.6 or earlier.
+#' @param patience Number of consecutive iterations with a decreasing ELBO
+#' tolerated before stopping, when \code{allow.neg.change = FALSE}; default 1.
+#' Note that the bound is not guaranteed to increase monotonically for this
+#' model: on the Gadarian data it rises to a single interior maximum and then
+#' declines for as long as the fit is allowed to run, so large values of
+#' \code{patience} cost time without improving the returned fit.
+#' @return An object of class sts
 #' 
 #' \item{alpha}{Estimated prevalence and sentiment-discourse values for each document and topic} 
 #' \item{gamma}{Estimated regression coefficients that determine prevalence and sentiment/discourse for each topic} 
@@ -95,7 +134,7 @@
 #' ## low max iteration number just for testing
 #' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 1, verbose = FALSE)
 #' @export
-sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2) {
+sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2, allow.neg.change = FALSE, patience = 1L) {
 
   # if (!is.null(seed)) {set.seed(seed)}
   if (!(is.character(initialization) && length(initialization) == 1 &&
@@ -107,6 +146,12 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     stop("logZSpacing must be a single positive number.")
   if (!(is.numeric(logZMargin) && length(logZMargin) == 1 && logZMargin >= 0))
     stop("logZMargin must be a single non-negative number.")
+  if (!(is.logical(allow.neg.change) && length(allow.neg.change) == 1 &&
+        !is.na(allow.neg.change)))
+    stop("allow.neg.change must be TRUE or FALSE.")
+  if (!(is.numeric(patience) && length(patience) == 1 && patience >= 1))
+    stop("patience must be a single integer >= 1.")
+  patience <- as.integer(patience)
   if(inherits(prevalence_sentiment,"formula")) {
     X <- model.matrix(prevalence_sentiment, data = corpus$meta)[,-1, drop = FALSE]
   } else {
@@ -208,6 +253,12 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
   }
   
   elbo_vec <- achange_vec <- kchange_vec <- rep(NA, maxIter)
+  ## best-bound tracking and the consecutive-decrease counter (see the
+  ## convergence block below)
+  best_elbo  <- -Inf
+  best_iter  <- 1L
+  best_state <- NULL
+  n_decrease <- 0L
   ntokens <- sum(mod.out$settings$dim$wcounts$x)
   converge <- FALSE
   iter <- 1
@@ -319,7 +370,44 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
       new <- elbo_vec[iter]
       old <- elbo_vec[iter-1]
       delta <- (new - old)/(0.1 + abs(old))
-      converge <- ifelse(delta < conv_criteria, TRUE, FALSE)
+
+      ## Convergence rule.  Up to sts 1.6 this was `delta < conv_criteria`,
+      ## which treats ANY decrease in the ELBO as convergence, however large:
+      ## a dip of delta = -7e-5 against convTol = 1e-5 stopped the fit.  That
+      ## fired in 3 of 4 Gadarian test runs, so reported iteration counts and
+      ## final bounds from 1.6 and earlier partly reflect premature stops
+      ## rather than convergence.
+      ##
+      ## Simply allowing the fit to continue past a decrease is NOT the fix.
+      ## On the Gadarian data the bound rises to a single interior maximum and
+      ## then declines monotonically for as long as it is allowed to run: K=3
+      ## with kappaEstimation = "lasso" peaks at iteration 25 and then falls
+      ## for 35 consecutive iterations (-227 by iteration 60), and K=3 with
+      ## "adjusted" peaks at iteration 8 and falls for 52 (-1554). So the
+      ## algorithm does not merely dip; past the peak it diverges, and 1.6's
+      ## rule was accidentally stopping one iteration past the best point.
+      ##
+      ## What is therefore fixed here is which iterate is RETURNED, not the
+      ## stopping test. The best-bound state is tracked and returned, so the
+      ## result can only improve on what the same stopping point gave before
+      ## (+2.09 and +4.40 on the two fits above). Stopping still happens on a
+      ## sustained decrease, after `patience` consecutive decreasing
+      ## iterations, which keeps the fit out of the declining region.
+      ##
+      ## allow.neg.change = TRUE restores 1.6 exactly: stop on the first
+      ## decrease and return the last iterate, not the best one.
+      if (delta < 0) n_decrease <- n_decrease + 1L else n_decrease <- 0L
+      if (delta < 0 && abs(delta) > conv_criteria && !allow.neg.change) {
+        warning(sprintf(paste0("The ELBO decreased at iteration %d ",
+                               "(relative change %.3e). The best iterate so ",
+                               "far (iteration %d) will be returned."),
+                        iter, delta, which.max(elbo_vec[1:iter])), call. = FALSE)
+      }
+      converge <- if (allow.neg.change) {
+        delta < conv_criteria
+      } else {
+        abs(delta) < conv_criteria || n_decrease >= patience
+      }
       
       achange <- mean(abs(alpha.est - alpha.est.old)/(0.1 + abs(alpha.est.old)))
       kchange <- mean(abs(c(kappa.est$kappa_t, kappa.est$kappa_s) - c(kappa.est.old$kappa_t, kappa.est.old$kappa_s))/(0.1 + abs(c(kappa.est.old$kappa_t, kappa.est.old$kappa_s))))
@@ -334,12 +422,40 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
       }
       if (verbose && iter %% topicreportevery==0) {
         printTopWords(list(alpha = alpha.est, kappa = kappa.est, sigma = sigma, mv = mv, vocab = mod.out$vocab))
-      }        
-    }     
+      }
+    }
+
+    ## Snapshot the best-bound state.  Taken here, after the M-step, so the
+    ## snapshot is exactly what the function would have returned had it
+    ## stopped at this iteration -- the same point in the cycle 1.6 returns
+    ## from, just possibly a different iteration.
+    if (!allow.neg.change && elbo > best_elbo) {
+      best_elbo <- elbo
+      best_iter <- iter
+      best_state <- list(alpha = alpha.est, gamma = Gamma.est,
+                         kappa = kappa.est, sigma_inv = Sigma_Inv.est,
+                         sigma = sigma, mu = mu$mu)
+    }
     iter <- iter + 1
   }
 
-  final.est <- list(alpha = alpha.est, gamma = Gamma.est, kappa = kappa.est, sigma_inv = Sigma_Inv.est, sigma = sigma, elbo = elbo_vec[1:(iter-1)], mv = mv, runtime = proc.time()[3] - timer_full, vocab = mod.out$vocab, mu = mu$mu)
+  elbo_path <- elbo_vec[1:(iter-1)]
+  if (!allow.neg.change && !is.null(best_state) && best_iter < (iter - 1)) {
+    if (verbose) {
+      cat(sprintf(paste0("Returning the best iterate (%d of %d; bound %.4f ",
+                         "vs %.4f at the last iteration).\n"),
+                  best_iter, iter - 1, best_elbo, elbo_vec[iter - 1]))
+    }
+    alpha.est     <- best_state$alpha
+    Gamma.est     <- best_state$gamma
+    kappa.est     <- best_state$kappa
+    Sigma_Inv.est <- best_state$sigma_inv
+    sigma         <- best_state$sigma
+    mu$mu         <- best_state$mu
+  }
+
+  final.est <- list(alpha = alpha.est, gamma = Gamma.est, kappa = kappa.est, sigma_inv = Sigma_Inv.est, sigma = sigma, elbo = elbo_path, mv = mv, runtime = proc.time()[3] - timer_full, vocab = mod.out$vocab, mu = mu$mu)
+  final.est$bestIter <- if (allow.neg.change) length(elbo_path) else best_iter
   if (parallelize) {
     # Stop the cluster when done
     parallel::stopCluster(cl)

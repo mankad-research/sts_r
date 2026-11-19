@@ -20,7 +20,8 @@ sts(
   logZSpacing = 0.01,
   logZMargin = 2,
   allow.neg.change = FALSE,
-  patience = 1L
+  patience = 1L,
+  kappaSolver = c("cpp", "glmnet")
 )
 }
 \arguments{

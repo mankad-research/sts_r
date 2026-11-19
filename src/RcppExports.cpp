@@ -53,6 +53,42 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// sts_optkappa_cpp
+Rcpp::List sts_optkappa_cpp(const Rcpp::List& phi_list, const arma::mat& abar, const arma::vec& mv, const arma::mat& kappa_t_old, const arma::mat& kappa_s_old, int nlambda, double lambda_min_ratio, double devmax, double tol);
+RcppExport SEXP _sts_sts_optkappa_cpp(SEXP phi_listSEXP, SEXP abarSEXP, SEXP mvSEXP, SEXP kappa_t_oldSEXP, SEXP kappa_s_oldSEXP, SEXP nlambdaSEXP, SEXP lambda_min_ratioSEXP, SEXP devmaxSEXP, SEXP tolSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type phi_list(phi_listSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type abar(abarSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type mv(mvSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type kappa_t_old(kappa_t_oldSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type kappa_s_old(kappa_s_oldSEXP);
+    Rcpp::traits::input_parameter< int >::type nlambda(nlambdaSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_min_ratio(lambda_min_ratioSEXP);
+    Rcpp::traits::input_parameter< double >::type devmax(devmaxSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    rcpp_result_gen = Rcpp::wrap(sts_optkappa_cpp(phi_list, abar, mv, kappa_t_old, kappa_s_old, nlambda, lambda_min_ratio, devmax, tol));
+    return rcpp_result_gen;
+END_RCPP
+}
+// sts_poislasso_path_cpp
+Rcpp::List sts_poislasso_path_cpp(const arma::vec& y, const arma::vec& offset, const arma::mat& abar, int nlambda, double lambda_min_ratio, double devmax, double tol);
+RcppExport SEXP _sts_sts_poislasso_path_cpp(SEXP ySEXP, SEXP offsetSEXP, SEXP abarSEXP, SEXP nlambdaSEXP, SEXP lambda_min_ratioSEXP, SEXP devmaxSEXP, SEXP tolSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::vec& >::type y(ySEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type offset(offsetSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type abar(abarSEXP);
+    Rcpp::traits::input_parameter< int >::type nlambda(nlambdaSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_min_ratio(lambda_min_ratioSEXP);
+    Rcpp::traits::input_parameter< double >::type devmax(devmaxSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    rcpp_result_gen = Rcpp::wrap(sts_poislasso_path_cpp(y, offset, abar, nlambda, lambda_min_ratio, devmax, tol));
+    return rcpp_result_gen;
+END_RCPP
+}
 // stm_lhoodcpp
 double stm_lhoodcpp(SEXP eta, SEXP beta, SEXP doc_ct, SEXP mu, SEXP siginv);
 RcppExport SEXP _sts_stm_lhoodcpp(SEXP etaSEXP, SEXP betaSEXP, SEXP doc_ctSEXP, SEXP muSEXP, SEXP siginvSEXP) {
@@ -156,6 +192,8 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_sts_sts_logZ_probe", (DL_FUNC) &_sts_sts_logZ_probe, 8},
     {"_sts_sts_estep_cpp", (DL_FUNC) &_sts_sts_estep_cpp, 14},
+    {"_sts_sts_optkappa_cpp", (DL_FUNC) &_sts_sts_optkappa_cpp, 9},
+    {"_sts_sts_poislasso_path_cpp", (DL_FUNC) &_sts_sts_poislasso_path_cpp, 7},
     {"_sts_stm_lhoodcpp", (DL_FUNC) &_sts_stm_lhoodcpp, 5},
     {"_sts_stm_gradcpp", (DL_FUNC) &_sts_stm_gradcpp, 5},
     {"_sts_stm_hpbcpp", (DL_FUNC) &_sts_stm_hpbcpp, 6},

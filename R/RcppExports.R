@@ -9,6 +9,14 @@ sts_estep_cpp <- function(documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma
     .Call(`_sts_sts_estep_cpp`, documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma_Inv, logdet_sigma, group, numGroups, maxit, logZMode, logZSpacing, logZMargin)
 }
 
+sts_optkappa_cpp <- function(phi_list, abar, mv, kappa_t_old, kappa_s_old, nlambda, lambda_min_ratio, devmax, tol) {
+    .Call(`_sts_sts_optkappa_cpp`, phi_list, abar, mv, kappa_t_old, kappa_s_old, nlambda, lambda_min_ratio, devmax, tol)
+}
+
+sts_poislasso_path_cpp <- function(y, offset, abar, nlambda, lambda_min_ratio, devmax, tol) {
+    .Call(`_sts_sts_poislasso_path_cpp`, y, offset, abar, nlambda, lambda_min_ratio, devmax, tol)
+}
+
 stm_lhoodcpp <- function(eta, beta, doc_ct, mu, siginv) {
     .Call(`_sts_stm_lhoodcpp`, eta, beta, doc_ct, mu, siginv)
 }

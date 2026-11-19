@@ -44,10 +44,32 @@ utils::globalVariables("i")
   as.numeric(mod$beta[, which.min(ic)])
 }
 
-opt.kappa <- function(phi, alphaS, kappa, c_d_bar, estimation = estimation, numGroups, group, V, mv, phiD, parallelize = parallelize) {
+opt.kappa <- function(phi, alphaS, kappa, c_d_bar, estimation = estimation, numGroups, group, V, mv, phiD, parallelize = parallelize, solver = "cpp") {
   low <- -Inf
   upp <- Inf
   K   <- ncol(alphaS)
+
+  ## Dedicated C++ solver for estimation = "lasso" (src/poislasso.cpp).
+  ## The design separates into K two-coefficient Poisson lasso problems with
+  ## numGroups rows each, coupled only through the shared lambda path and the
+  ## joint AIC; the solver reproduces glmnet's lambda_max, grid and dev.ratio
+  ## truncation exactly and solves each subproblem to a tighter tolerance than
+  ## glmnet's default thresh = 1e-5. Where it differs from the glmnet path
+  ## (about 2% of words on poliblog2k) glmnet refit at thresh = 1e-12 agrees
+  ## with it, so the differences are glmnet's convergence error, not the
+  ## solver's. solver = "glmnet" keeps the 1.6 code path below.
+  if (estimation == "lasso" && identical(solver, "cpp")) {
+    abar <- do.call(rbind, lapply(split(alphaS, group),
+                                  function(x) colMeans(matrix(x, ncol = K))))
+    res <- sts_optkappa_cpp(phi_list = phi, abar = abar, mv = mv,
+                            kappa_t_old = kappa$kappa_t,
+                            kappa_s_old = kappa$kappa_s,
+                            nlambda = 250L, lambda_min_ratio = 0.001,
+                            devmax = 0.999, tol = 1e-10)
+    kappa$kappa_t <- res$kappa_t
+    kappa$kappa_s <- res$kappa_s
+    return(kappa)
+  }
   penalty.factor <- c(rep(1, K), rep(1, K))
 
   phi_sum   <- safelog(unlist(lapply(phi, colSums)))  # numGroups*K vector

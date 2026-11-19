@@ -134,7 +134,7 @@
 #' ## low max iteration number just for testing
 #' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 1, verbose = FALSE)
 #' @export
-sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2, allow.neg.change = FALSE, patience = 1L) {
+sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2, allow.neg.change = FALSE, patience = 1L, kappaSolver = c("cpp", "glmnet")) {
 
   # if (!is.null(seed)) {set.seed(seed)}
   if (!(is.character(initialization) && length(initialization) == 1 &&
@@ -152,6 +152,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
   if (!(is.numeric(patience) && length(patience) == 1 && patience >= 1))
     stop("patience must be a single integer >= 1.")
   patience <- as.integer(patience)
+  kappaSolver <- match.arg(kappaSolver)
   if(inherits(prevalence_sentiment,"formula")) {
     X <- model.matrix(prevalence_sentiment, data = corpus$meta)[,-1, drop = FALSE]
   } else {
@@ -244,7 +245,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
 
   ## estimate kappa 
   if (initialization == "anchor") {
-    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, c_d_bar = c_d_bar, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, phiD =phiD, parallelize = parallelize)
+    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, c_d_bar = c_d_bar, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, phiD =phiD, parallelize = parallelize, solver = kappaSolver)
     kappa.est$kappa_t[which(kappa.est$kappa_t == 0)] <- sign(rnorm(sum(kappa.est$kappa_t == 0)))*1e-4
     kappa.est$kappa_s[which(kappa.est$kappa_s == 0)] <- sign(rnorm(sum(kappa.est$kappa_s == 0)))*1e-4
   } else {
@@ -351,7 +352,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     sigma.chol <- chol(sigma)
     Sigma_Inv.est <- chol2inv(sigma.chol)
     
-    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, c_d_bar = c_d_bar, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, phiD =phiD, parallelize = parallelize)
+    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, c_d_bar = c_d_bar, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, phiD =phiD, parallelize = parallelize, solver = kappaSolver)
     
     if(verbose) {
       #M-step message

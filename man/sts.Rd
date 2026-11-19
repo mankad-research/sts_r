@@ -21,7 +21,8 @@ sts(
   logZMargin = 2,
   allow.neg.change = FALSE,
   patience = 1L,
-  kappaSolver = c("cpp", "glmnet")
+  kappaSolver = c("cpp", "glmnet"),
+  cores = getOption("sts.cores", 1L)
 )
 }
 \arguments{
@@ -72,7 +73,8 @@ approximation to the multinomial.  See Chen and Mankad (2025) on the implementat
 \item{verbose}{A logical flag indicating whether information should be
 printed to the screen.}
 
-\item{parallelize}{A logical flag indicating whether to parallelize the estimation using all but one CPU cores on your local machine.}
+\item{parallelize}{Deprecated; use \code{cores}. \code{TRUE} is treated
+as \code{cores = parallel::detectCores() - 1} with a warning.}
 
 \item{stmSeed}{A prefit STM model object (e.g., from \code{stm::stm()} with
 \code{initializationVar} as the content covariate) to initialize the STS model.

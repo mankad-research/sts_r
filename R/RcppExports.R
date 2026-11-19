@@ -5,12 +5,12 @@ sts_logZ_probe <- function(kappa_t, kappa_s, mv, avals, mode, a_lo, a_hi, spacin
     .Call(`_sts_sts_logZ_probe`, kappa_t, kappa_s, mv, avals, mode, a_lo, a_hi, spacing)
 }
 
-sts_estep_cpp <- function(documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma_Inv, logdet_sigma, group, numGroups, maxit, logZMode, logZSpacing, logZMargin) {
-    .Call(`_sts_sts_estep_cpp`, documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma_Inv, logdet_sigma, group, numGroups, maxit, logZMode, logZSpacing, logZMargin)
+sts_estep_cpp <- function(documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma_Inv, logdet_sigma, group, numGroups, maxit, logZMode, logZSpacing, logZMargin, cores = 1L) {
+    .Call(`_sts_sts_estep_cpp`, documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma_Inv, logdet_sigma, group, numGroups, maxit, logZMode, logZSpacing, logZMargin, cores)
 }
 
-sts_optkappa_cpp <- function(phi_list, abar, mv, kappa_t_old, kappa_s_old, nlambda, lambda_min_ratio, devmax, tol) {
-    .Call(`_sts_sts_optkappa_cpp`, phi_list, abar, mv, kappa_t_old, kappa_s_old, nlambda, lambda_min_ratio, devmax, tol)
+sts_optkappa_cpp <- function(phi_list, abar, mv, kappa_t_old, kappa_s_old, nlambda, lambda_min_ratio, devmax, tol, cores = 1L) {
+    .Call(`_sts_sts_optkappa_cpp`, phi_list, abar, mv, kappa_t_old, kappa_s_old, nlambda, lambda_min_ratio, devmax, tol, cores)
 }
 
 sts_poislasso_path_cpp <- function(y, offset, abar, nlambda, lambda_min_ratio, devmax, tol) {

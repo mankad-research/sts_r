@@ -4,8 +4,6 @@
 # distributed Poisson approach.  By default, via the main STS function, estimation is
 # performed with lasso.
 
-# 'i' is the foreach loop variable; declare it to silence R CMD check NOTE.
-utils::globalVariables("i")
 
 # Internal helper: fit a Poisson-lasso via glmnet with automatic nlambda retry and AIC
 # selection.  Returns the selected coefficient vector (length 2*K).
@@ -44,7 +42,7 @@ utils::globalVariables("i")
   as.numeric(mod$beta[, which.min(ic)])
 }
 
-opt.kappa <- function(phi, alphaS, kappa, c_d_bar, estimation = estimation, numGroups, group, V, mv, phiD, parallelize = parallelize, solver = "cpp") {
+opt.kappa <- function(phi, alphaS, kappa, c_d_bar, estimation = estimation, numGroups, group, V, mv, phiD, solver = "cpp", cores = 1L) {
   low <- -Inf
   upp <- Inf
   K   <- ncol(alphaS)
@@ -65,7 +63,7 @@ opt.kappa <- function(phi, alphaS, kappa, c_d_bar, estimation = estimation, numG
                             kappa_t_old = kappa$kappa_t,
                             kappa_s_old = kappa$kappa_s,
                             nlambda = 250L, lambda_min_ratio = 0.001,
-                            devmax = 0.999, tol = 1e-10)
+                            devmax = 0.999, tol = 1e-10, cores = cores)
     kappa$kappa_t <- res$kappa_t
     kappa$kappa_s <- res$kappa_s
     return(kappa)
@@ -81,86 +79,41 @@ opt.kappa <- function(phi, alphaS, kappa, c_d_bar, estimation = estimation, numG
   phiD_list <- lapply(split(phiD, group), matrix, ncol = K)
   G         <- length(alpha_s)
 
-  if (!parallelize) {
-    for (v in 1:V) {
-      y_agg      <- unlist(lapply(phi, function(m) m[v, ]))
-      offset_agg <- phi_sum + mv[v]
+  ## glmnet path (kappaSolver = "glmnet", or kappaEstimation = "adjusted").
+  ## Runs serially: the foreach backend was removed in 1.7.
+  for (v in 1:V) {
+    y_agg      <- unlist(lapply(phi, function(m) m[v, ]))
+    offset_agg <- phi_sum + mv[v]
 
-      if (estimation == "lasso") {
-        coef <- .fit_glmnet_lasso(cbind(x1_agg, alpha_agg), y_agg, offset_agg, penalty.factor, low, upp)
+    if (estimation == "lasso") {
+      coef <- .fit_glmnet_lasso(cbind(x1_agg, alpha_agg), y_agg, offset_agg, penalty.factor, low, upp)
 
-      } else if (estimation == "adjusted") {
-        coef           <- rep(0, 2 * K)
-        kk             <- 1
-        max_inner_iter <- 10
-        weighted_alpha <- alpha_s
+    } else if (estimation == "adjusted") {
+      coef           <- rep(0, 2 * K)
+      kk             <- 1
+      max_inner_iter <- 10
+      weighted_alpha <- alpha_s
 
-        while (kk <= max_inner_iter) {
-          coef_old <- coef
+      while (kk <= max_inner_iter) {
+        coef_old <- coef
 
-          for (t in 1:G) {
-            weighted_alpha[[t]] <- alpha_s[[t]] * apply(
-              safelog(phiD_list[[t]]) + (alpha_s[[t]] %*% diag(coef[(K + 1):(2 * K)])),
-              2, softmax)
-          }
-          alpha_agg_adj <- do.call(rbind, lapply(weighted_alpha, function(x) diag(colSums(x))))
-
-          coef <- .fit_glmnet_lasso(cbind(x1_agg, alpha_agg_adj), y_agg, offset_agg, penalty.factor, low, upp)
-
-          delta_converge <- mean(abs(coef - coef_old) / (0.1 + abs(coef_old)))
-          if (delta_converge <= 1e-4) break
-          kk <- kk + 1
+        for (t in 1:G) {
+          weighted_alpha[[t]] <- alpha_s[[t]] * apply(
+            safelog(phiD_list[[t]]) + (alpha_s[[t]] %*% diag(coef[(K + 1):(2 * K)])),
+            2, softmax)
         }
+        alpha_agg_adj <- do.call(rbind, lapply(weighted_alpha, function(x) diag(colSums(x))))
+
+        coef <- .fit_glmnet_lasso(cbind(x1_agg, alpha_agg_adj), y_agg, offset_agg, penalty.factor, low, upp)
+
+        delta_converge <- mean(abs(coef - coef_old) / (0.1 + abs(coef_old)))
+        if (delta_converge <= 1e-4) break
+        kk <- kk + 1
       }
-
-      kappa$kappa_t[v, ] <- (coef[1:K]              + kappa$kappa_t[v, ]) / 2
-      kappa$kappa_s[v, ] <- (coef[(K + 1):(2 * K)]  + kappa$kappa_s[v, ]) / 2
     }
 
-  } else {
-    process_word <- function(v) {
-      y_agg      <- unlist(lapply(phi, function(m) m[v, ]))
-      offset_agg <- phi_sum + mv[v]
-
-      if (estimation == "lasso") {
-        coef <- .fit_glmnet_lasso(cbind(x1_agg, alpha_agg), y_agg, offset_agg, penalty.factor, low, upp)
-
-      } else if (estimation == "adjusted") {
-        coef           <- rep(0, 2 * K)
-        kk             <- 1
-        max_inner_iter <- 10
-        weighted_alpha <- alpha_s
-
-        while (kk <= max_inner_iter) {
-          coef_old <- coef
-
-          for (t in 1:G) {
-            weighted_alpha[[t]] <- alpha_s[[t]] * apply(
-              safelog(phiD_list[[t]]) + (alpha_s[[t]] %*% diag(coef[(K + 1):(2 * K)])),
-              2, softmax)
-          }
-          alpha_agg_adj <- do.call(rbind, lapply(weighted_alpha, function(x) diag(colSums(x))))
-
-          coef <- .fit_glmnet_lasso(cbind(x1_agg, alpha_agg_adj), y_agg, offset_agg, penalty.factor, low, upp)
-
-          delta_converge <- mean(abs(coef - coef_old) / (0.1 + abs(coef_old)))
-          if (delta_converge <= 1e-4) break
-          kk <- kk + 1
-        }
-      }
-      list(coef = coef)
-    }
-
-    results <- foreach(i = 1:V,
-                       .export   = c('softmax', 'safelog', 'lse', '.fit_glmnet_lasso'),
-                       .packages = c('glmnet')) %dopar% {
-      process_word(i)
-    }
-
-    for (v in 1:V) {
-      kappa$kappa_t[v, ] <- (kappa$kappa_t[v, ] + results[[v]]$coef[1:K])             / 2
-      kappa$kappa_s[v, ] <- (kappa$kappa_s[v, ] + results[[v]]$coef[(K + 1):(2 * K)]) / 2
-    }
+    kappa$kappa_t[v, ] <- (coef[1:K]              + kappa$kappa_t[v, ]) / 2
+    kappa$kappa_s[v, ] <- (coef[(K + 1):(2 * K)]  + kappa$kappa_s[v, ]) / 2
   }
   return(kappa)
 }

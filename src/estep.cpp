@@ -23,11 +23,13 @@
 // bit-for-bit, because sums are accumulated in a different order.
 
 #include <RcppArmadillo.h>
+#include <RcppParallel.h>
 #include <memory>
+#include <string>
 #include "normalizer.h"
 #include "hermite.h"
 #include "vmmin.h"
-// [[Rcpp::depends(RcppArmadillo)]]
+// [[Rcpp::depends(RcppArmadillo, RcppParallel)]]
 
 using namespace sts;
 
@@ -171,6 +173,8 @@ public:
   // beta_bar on the document's rows == 1.6's BZ[cdv_ind, ].
   const arma::mat& beta_bar() const { return bb_; }
   double objective() const { return obj_; }
+  // logZ_k at the last prepared alpha (the optimum, once hessian() has run)
+  const arma::vec& logZ() const { return lZ_; }
 
 private:
   void prepare(const arma::vec& a) {
@@ -225,8 +229,156 @@ private:
 };
 
 // --------------------------------------------------------------------------
-// Full E-step over all documents.
+// Full E-step over all documents, multithreaded with RcppParallel.
+//
+// Determinism: results must not depend on the number of threads, so nothing
+// is accumulated in a thread-dependent order.
+//  * Documents are split into a FIXED set of blocks determined by D alone.
+//    Each block is processed serially by one thread, accumulating its own
+//    sigma.ss and ELBO terms, and the blocks are summed in block order.
+//  * Per-document outputs (alpha, phiD, logZ at the optimum) go to disjoint
+//    rows.
+//  * phi, where documents collide on shared vocabulary rows, is built in a
+//    second pass that is parallel over WORDS (disjoint rows of phi), adding a
+//    word's documents in ascending order -- the same order and arithmetic as
+//    the serial loop, so phi is bitwise identical to it.
+// No R API is touched inside the threads: documents are converted up front,
+// and errors are recorded per block and raised after the parallel region.
 // --------------------------------------------------------------------------
+namespace {
+
+struct BlockOut {
+  arma::mat sigma_ss;
+  double elbo = 0.0, elbo_obj = 0.0, elbo_lap = 0.0;
+  long fncount = 0, grcount = 0, nfail = 0, ncholfix = 0;
+  std::string err;
+};
+
+struct EstepWorker : public RcppParallel::Worker {
+  const std::vector<arma::uvec>& ind;
+  const std::vector<arma::vec>&  cnt;
+  const Normalizer& nrm;
+  const arma::mat& lin_base;
+  const arma::mat& kappa_s;
+  const arma::mat& mu;
+  const arma::mat& Sigma_Inv;
+  const double logdet_sigma;
+  const int maxit;
+  const std::vector<arma::uword>& block_start;
+  arma::mat& alpha;
+  arma::mat& phiD;
+  arma::mat& lZ_opt;
+  std::vector<BlockOut>& out;
+  const arma::uword P;
+
+  EstepWorker(const std::vector<arma::uvec>& ind_, const std::vector<arma::vec>& cnt_,
+              const Normalizer& nrm_, const arma::mat& lin_base_, const arma::mat& kappa_s_,
+              const arma::mat& mu_, const arma::mat& Sigma_Inv_, double logdet_sigma_,
+              int maxit_, const std::vector<arma::uword>& block_start_,
+              arma::mat& alpha_, arma::mat& phiD_, arma::mat& lZ_opt_,
+              std::vector<BlockOut>& out_, arma::uword P_)
+    : ind(ind_), cnt(cnt_), nrm(nrm_), lin_base(lin_base_), kappa_s(kappa_s_),
+      mu(mu_), Sigma_Inv(Sigma_Inv_), logdet_sigma(logdet_sigma_), maxit(maxit_),
+      block_start(block_start_), alpha(alpha_), phiD(phiD_), lZ_opt(lZ_opt_),
+      out(out_), P(P_) {}
+
+  void operator()(std::size_t b0, std::size_t b1) {
+    for (std::size_t b = b0; b < b1; ++b) {
+      BlockOut& bo = out[b];
+      bo.sigma_ss.zeros(P, P);
+      try {
+        for (arma::uword d = block_start[b]; d < block_start[b + 1]; ++d) {
+          // The document's slices, formed once -- not once per BFGS call.
+          arma::mat lb_doc = lin_base.rows(ind[d]);
+          arma::mat ks_doc = kappa_s.rows(ind[d]);
+          arma::vec mu_d   = mu.col(d);
+          DocProblem prob(nrm, lb_doc, ks_doc, cnt[d], mu_d, Sigma_Inv);
+
+          arma::vec a = alpha.row(d).t();
+          VmminResult vr = vmmin(a, prob, maxit);
+          alpha.row(d) = a.t();
+          bo.fncount += vr.fncount; bo.grcount += vr.grcount; bo.nfail += vr.fail;
+
+          arma::mat H = prob.hessian(a);
+          arma::mat R;
+          if (!arma::chol(R, H)) {
+            // 1.6's fix-up: inflate each diagonal entry to at least its
+            // off-diagonal absolute row sum, then retry.
+            arma::vec dv = H.diag();
+            arma::vec mg = arma::sum(arma::abs(H), 1) - arma::abs(dv);
+            for (arma::uword i = 0; i < P; ++i) dv[i] = std::max(dv[i], mg[i]);
+            H.diag() = dv;
+            bo.ncholfix++;
+            if (!arma::chol(R, H))
+              throw std::runtime_error("Cholesky failed after diagonal fix-up");
+          }
+          arma::mat Ri;
+          if (!arma::inv(Ri, arma::trimatu(R)))
+            throw std::runtime_error("inverse of the Cholesky factor failed");
+          bo.sigma_ss += Ri * Ri.t();                        // == chol2inv(R)
+          const double lap = 0.5 * (arma::accu(arma::log(R.diag())) - logdet_sigma);
+          bo.elbo     += prob.objective() + lap;
+          bo.elbo_obj += prob.objective();
+          bo.elbo_lap += lap;
+
+          // phiD reuses beta_bar; phi is built in the word pass below.
+          arma::mat contrib = prob.beta_bar();
+          contrib.each_col() %= cnt[d];
+          phiD.row(d)   = arma::sum(contrib, 0);
+          lZ_opt.row(d) = prob.logZ().t();
+        }
+      } catch (std::exception& e) {
+        bo.err = e.what();
+      } catch (...) {
+        bo.err = "unknown error in the E-step";
+      }
+    }
+  }
+};
+
+// Second pass: phi, parallel over vocabulary words. Replicates the arithmetic
+// of DocProblem::prepare() at the optimum exactly, row by row.
+struct PhiWorker : public RcppParallel::Worker {
+  const std::vector<arma::uword>& wptr;   // CSR: documents containing word v
+  const std::vector<arma::uword>& wdoc;
+  const std::vector<double>&      wcnt;
+  const arma::mat& lin_base;
+  const arma::mat& kappa_s;
+  const arma::mat& alpha;
+  const arma::mat& lZ_opt;
+  const arma::uvec& group;                // 1-based
+  std::vector<arma::mat>& phi;
+  const arma::uword K;
+
+  PhiWorker(const std::vector<arma::uword>& wptr_, const std::vector<arma::uword>& wdoc_,
+            const std::vector<double>& wcnt_, const arma::mat& lin_base_,
+            const arma::mat& kappa_s_, const arma::mat& alpha_, const arma::mat& lZ_opt_,
+            const arma::uvec& group_, std::vector<arma::mat>& phi_, arma::uword K_)
+    : wptr(wptr_), wdoc(wdoc_), wcnt(wcnt_), lin_base(lin_base_), kappa_s(kappa_s_),
+      alpha(alpha_), lZ_opt(lZ_opt_), group(group_), phi(phi_), K(K_) {}
+
+  void operator()(std::size_t v0, std::size_t v1) {
+    std::vector<double> t(K);
+    for (std::size_t v = v0; v < v1; ++v) {
+      for (arma::uword p = wptr[v]; p < wptr[v + 1]; ++p) {
+        const arma::uword d = wdoc[p];
+        double rs = 0.0;
+        for (arma::uword k = 0; k < K; ++k) {
+          const double eta = (k + 1 < K) ? std::exp(alpha(d, k)) : 1.0;
+          const double bk  = std::exp(lin_base(v, k) + kappa_s(v, k) * alpha(d, K - 1 + k)
+                                      - lZ_opt(d, k));
+          t[k] = eta * bk;
+          rs += t[k];
+        }
+        arma::mat& ph = phi[group[d] - 1];
+        for (arma::uword k = 0; k < K; ++k) ph(v, k) += (t[k] / rs) * wcnt[p];
+      }
+    }
+  }
+};
+
+}  // namespace
+
 // [[Rcpp::export]]
 Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
                          const arma::mat& alpha_init,
@@ -241,11 +393,22 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
                          int maxit,
                          int logZMode,
                          double logZSpacing,
-                         double logZMargin) {
+                         double logZMargin,
+                         int cores = 1) {
   const arma::uword D = documents.size();
   const arma::uword V = mv.n_elem;
   const arma::uword K = kappa_t.n_cols;
   const arma::uword P = 2 * K - 1;
+  if (cores < 1) cores = 1;
+
+  // Documents converted on the main thread: no R API inside the workers.
+  std::vector<arma::uvec> ind(D);
+  std::vector<arma::vec>  cnt(D);
+  for (arma::uword d = 0; d < D; ++d) {
+    const arma::umat doc = Rcpp::as<arma::umat>(documents[d]);
+    ind[d] = doc.row(0).t() - 1;                            // 0-based vocab rows
+    cnt[d] = arma::conv_to<arma::vec>::from(doc.row(1).t());
+  }
 
   // Precomputed once per E-step instead of once per objective/gradient call.
   arma::mat lin_base(V, K);
@@ -255,7 +418,8 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
   // tabulates logZ, logZ' and logZ'' once for this E-step over the range of
   // alpha_s the documents currently occupy, padded by logZMargin, and
   // interpolates.  Anything outside the table still goes to the exact
-  // backend, so no value is ever extrapolated.
+  // backend, so no value is ever extrapolated.  (The table is built before
+  // the parallel region; lookups are read-only.)
   double a_lo = 0.0, a_hi = 0.0;
   if (logZMode == 1) {
     const arma::mat as = alpha_init.cols(K - 1, P - 1);
@@ -265,64 +429,53 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
   ExactNormalizer   nrm_exact(lin_base, kappa_s);
   std::unique_ptr<HermiteNormalizer> nrm_herm;
   if (logZMode == 1) {
-    nrm_herm.reset(new HermiteNormalizer(lin_base, kappa_s, a_lo, a_hi, logZSpacing));
+    nrm_herm.reset(new HermiteNormalizer(lin_base, kappa_s, a_lo, a_hi, logZSpacing, cores));
   }
   const Normalizer& nrm = (logZMode == 1)
       ? static_cast<const Normalizer&>(*nrm_herm)
       : static_cast<const Normalizer&>(nrm_exact);
 
+  // ---- pass 1: documents, in a fixed block decomposition ----
+  const arma::uword nb = std::max<arma::uword>(1, std::min<arma::uword>(D, 256));
+  std::vector<arma::uword> block_start(nb + 1);
+  for (arma::uword b = 0; b <= nb; ++b) block_start[b] = (b * D) / nb;
+
   arma::mat alpha = alpha_init;
-  arma::mat sigma_ss(P, P, arma::fill::zeros);
   arma::mat phiD(D, K, arma::fill::zeros);
-  std::vector<arma::mat> phi(numGroups, arma::mat(V, K, arma::fill::zeros));
+  arma::mat lZ_opt(D, K, arma::fill::zeros);
+  std::vector<BlockOut> out(nb);
+
+  EstepWorker ew(ind, cnt, nrm, lin_base, kappa_s, mu, Sigma_Inv, logdet_sigma,
+                 maxit, block_start, alpha, phiD, lZ_opt, out, P);
+  RcppParallel::parallelFor(0, nb, ew, 1, cores);
+
+  arma::mat sigma_ss(P, P, arma::fill::zeros);
   double elbo = 0.0, elbo_obj = 0.0, elbo_lap = 0.0;
   long fncount = 0, grcount = 0, nfail = 0, ncholfix = 0;
-
-  for (arma::uword d = 0; d < D; ++d) {
-    const arma::umat doc = Rcpp::as<arma::umat>(documents[d]);
-    const arma::uvec ind = doc.row(0).t() - 1;              // 0-based vocab rows
-    const arma::vec  cnt = arma::conv_to<arma::vec>::from(doc.row(1).t());
-
-    // The document's slices, formed once -- not once per BFGS call.
-    arma::mat lb_doc = lin_base.rows(ind);
-    arma::mat ks_doc = kappa_s.rows(ind);
-    arma::vec mu_d   = mu.col(d);
-
-    DocProblem prob(nrm, lb_doc, ks_doc, cnt, mu_d, Sigma_Inv);
-
-    arma::vec a = alpha.row(d).t();
-    VmminResult vr = vmmin(a, prob, maxit);
-    alpha.row(d) = a.t();
-    fncount += vr.fncount; grcount += vr.grcount; nfail += vr.fail;
-
-    arma::mat H = prob.hessian(a);
-    arma::mat R;
-    if (!arma::chol(R, H)) {
-      // 1.6's fix-up: inflate each diagonal entry to at least its off-diagonal
-      // absolute row sum, then retry.
-      arma::vec dv = H.diag();
-      arma::vec mg = arma::sum(arma::abs(H), 1) - arma::abs(dv);
-      for (arma::uword i = 0; i < P; ++i) dv[i] = std::max(dv[i], mg[i]);
-      H.diag() = dv;
-      ncholfix++;
-      if (!arma::chol(R, H)) Rcpp::stop("Cholesky failed after diagonal fix-up");
-    }
-    arma::mat Ri = arma::inv(arma::trimatu(R));
-    sigma_ss += Ri * Ri.t();                                 // == chol2inv(R)
-    elbo += prob.objective() + 0.5 * (arma::accu(arma::log(R.diag())) - logdet_sigma);
-    // Decomposition, for diagnosing the non-monotone bound: the data-fit term
-    // (the per-document log-posterior at its mode) and the Laplace term are
-    // tracked separately so it is visible which one declines.
-    elbo_obj += prob.objective();
-    elbo_lap += 0.5 * (arma::accu(arma::log(R.diag())) - logdet_sigma);
-
-    // phi accumulation reuses beta_bar: no further softmax over V.
-    const arma::mat& bb = prob.beta_bar();
-    arma::mat contrib = bb;
-    contrib.each_col() %= cnt;
-    phi[group[d] - 1].rows(ind) += contrib;
-    phiD.row(d) = arma::sum(contrib, 0);
+  for (arma::uword b = 0; b < nb; ++b) {                    // fixed order
+    if (!out[b].err.empty()) Rcpp::stop("E-step: " + out[b].err);
+    sigma_ss += out[b].sigma_ss;
+    elbo += out[b].elbo; elbo_obj += out[b].elbo_obj; elbo_lap += out[b].elbo_lap;
+    fncount += out[b].fncount; grcount += out[b].grcount;
+    nfail += out[b].nfail; ncholfix += out[b].ncholfix;
   }
+
+  // ---- pass 2: phi, parallel over words ----
+  std::vector<arma::uword> wptr(V + 1, 0);
+  for (arma::uword d = 0; d < D; ++d)
+    for (arma::uword i = 0; i < ind[d].n_elem; ++i) wptr[ind[d][i] + 1]++;
+  for (arma::uword v = 0; v < V; ++v) wptr[v + 1] += wptr[v];
+  std::vector<arma::uword> wdoc(wptr[V]), fill(wptr.begin(), wptr.end() - 1);
+  std::vector<double> wcnt(wptr[V]);
+  for (arma::uword d = 0; d < D; ++d)                       // ascending d per word
+    for (arma::uword i = 0; i < ind[d].n_elem; ++i) {
+      const arma::uword v = ind[d][i], p = fill[v]++;
+      wdoc[p] = d; wcnt[p] = cnt[d][i];
+    }
+
+  std::vector<arma::mat> phi(numGroups, arma::mat(V, K, arma::fill::zeros));
+  PhiWorker pw(wptr, wdoc, wcnt, lin_base, kappa_s, alpha, lZ_opt, group, phi, K);
+  RcppParallel::parallelFor(0, V, pw, 64, cores);
 
   Rcpp::List phi_out(numGroups);
   for (int g = 0; g < numGroups; ++g) phi_out[g] = phi[g];

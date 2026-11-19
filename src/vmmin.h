@@ -18,6 +18,7 @@
 #include <RcppArmadillo.h>
 #include <cmath>
 #include <vector>
+#include <stdexcept>
 
 namespace sts {
 
@@ -59,7 +60,9 @@ VmminResult vmmin(arma::vec& b, Problem& prob, int maxit = 500,
   int count, funcount, gradcount, iter = 0, ilast;
 
   f = prob.fn(b);
-  if (!std::isfinite(f)) Rcpp::stop("initial value in 'vmmin' is not finite");
+  // std exception, not Rcpp::stop: this runs inside worker threads, where
+  // the R API must not be called.
+  if (!std::isfinite(f)) throw std::runtime_error("initial value in 'vmmin' is not finite");
   res.value = f;
   funcount = gradcount = 1;
   prob.gr(b, g);

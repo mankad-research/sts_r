@@ -29,9 +29,10 @@
 // preserved, here only the optimum needs to agree.
 
 #include <RcppArmadillo.h>
+#include <RcppParallel.h>
 #include <vector>
 #include <cmath>
-// [[Rcpp::depends(RcppArmadillo)]]
+// [[Rcpp::depends(RcppArmadillo, RcppParallel)]]
 
 namespace {
 
@@ -188,6 +189,133 @@ struct TopicFit {
 
 // Replacement for opt.kappa()'s per-word glmnet loop.
 //
+// Words are independent, so the loop runs in parallel over words with
+// RcppParallel. Each word's fit depends only on its own data, every output is
+// a disjoint row, and the diagnostic counters are kept per word and summed
+// serially, so the result is identical for any number of threads.
+namespace {
+
+struct OptKappaWorker : public RcppParallel::Worker {
+  const std::vector<arma::mat>& phi;      // numGroups x (V x K)
+  const arma::mat& phi_sum;               // G x K
+  const arma::mat& abar;                  // G x K
+  const arma::vec& mv;
+  const arma::mat& kappa_t_old;
+  const arma::mat& kappa_s_old;
+  const int nlambda;
+  const double r, devmax, tol;
+  const int G;
+  const arma::uword K;
+  arma::mat& kt;
+  arma::mat& ks;
+  std::vector<double>& npath, &nsweep, &nnewton;
+
+  OptKappaWorker(const std::vector<arma::mat>& phi_, const arma::mat& phi_sum_,
+                 const arma::mat& abar_, const arma::vec& mv_,
+                 const arma::mat& kto, const arma::mat& kso, int nlambda_,
+                 double r_, double devmax_, double tol_, int G_, arma::uword K_,
+                 arma::mat& kt_, arma::mat& ks_, std::vector<double>& npath_,
+                 std::vector<double>& nsweep_, std::vector<double>& nnewton_)
+    : phi(phi_), phi_sum(phi_sum_), abar(abar_), mv(mv_), kappa_t_old(kto),
+      kappa_s_old(kso), nlambda(nlambda_), r(r_), devmax(devmax_), tol(tol_),
+      G(G_), K(K_), kt(kt_), ks(ks_), npath(npath_), nsweep(nsweep_),
+      nnewton(nnewton_) {}
+
+  void operator()(std::size_t v0, std::size_t v1) {
+    const int n = G * (int)K;
+    const double inv_n = 1.0 / (double)n;
+    // per-thread scratch, laid out topic-major (index k*G + g)
+    std::vector<double> yv(K * G), Ev(K * G), av(K * G), Yk(K), Yak(K), SEk(K), SaEk(K);
+    std::vector<double> b1(K), b2(K), bb1(K), bb2(K);
+
+    for (std::size_t v = v0; v < v1; ++v) {
+      long n_sweep = 0, n_newton = 0, np = 0;
+
+      // ---- lambda_max and nulldev over the whole stacked problem ----
+      double gmax = 0.0, nulldev = 0.0;
+      for (arma::uword k = 0; k < K; ++k) {
+        double g_int = 0.0, g_slp = 0.0;
+        for (int g = 0; g < G; ++g) {
+          const double yy = phi[g](v, k);
+          const double mu0 = std::exp(phi_sum(g, k) + mv[v]);
+          g_int += (mu0 - yy);
+          g_slp += abar(g, k) * (mu0 - yy);
+          nulldev += dev_term(yy, mu0);
+        }
+        gmax = std::max(gmax, std::fabs(g_int));
+        gmax = std::max(gmax, std::fabs(g_slp));
+      }
+      const double lambda_max = gmax * inv_n;
+
+      // ---- per-(word, topic) data, computed once for the whole path ----
+      for (arma::uword k = 0; k < K; ++k) {
+        double Y = 0.0, Ya = 0.0, SE = 0.0, SaE = 0.0;
+        for (int g = 0; g < G; ++g) {
+          const arma::uword i = k * G + g;
+          yv[i] = phi[g](v, k);
+          Ev[i] = std::exp(phi_sum(g, k) + mv[v]);
+          av[i] = abar(g, k);
+          Y += yv[i]; Ya += av[i] * yv[i];
+          SE += Ev[i]; SaE += av[i] * Ev[i];
+        }
+        Yk[k] = Y; Yak[k] = Ya; SEk[k] = SE; SaEk[k] = SaE;
+      }
+
+      // ---- walk the path, tracking AIC ----
+      for (arma::uword k = 0; k < K; ++k) { b1[k] = b2[k] = bb1[k] = bb2[k] = 0.0; }
+      double best_ic = std::numeric_limits<double>::infinity();
+
+      double lambda = lambda_max;
+      for (int t = 0; t < nlambda; ++t, lambda *= r) {
+        double dev = 0.0;
+        int df = 0;
+        // lambda_max is, by definition, the smallest lambda at which every
+        // coefficient is zero, and glmnet sets the first path solution to
+        // zero explicitly. Do the same rather than re-deriving it: the
+        // gradient at zero inside the solver is accumulated differently from
+        // lambda_max and the two can differ by an ulp, which on some words
+        // let a ~1e-15 coefficient "enter" at the first point and moved the
+        // AIC choice to the runner-up.
+        if (t == 0) { dev = nulldev; df = 0; }
+        else for (arma::uword k = 0; k < K; ++k) {
+          const double* y = &yv[k * G];
+          const double* E = &Ev[k * G];
+          const double* a = &av[k * G];
+          TopicFit tf{ y, E, a, G, (double)n, inv_n, Yk[k], Yak[k], SEk[k], SaEk[k] };
+          double c1 = b1[k], c2 = b2[k];                 // warm start along the path
+          tf.solve(c1, c2, lambda, tol, n_sweep, n_newton);
+          b1[k] = c1; b2[k] = c2;
+          if (c1 != 0.0) ++df;
+          if (c2 != 0.0) ++df;
+          const double ec1 = std::exp(c1);
+          for (int g = 0; g < G; ++g)
+            dev += dev_term(y[g], E[g] * ec1 * std::exp(c2 * a[g]));
+        }
+
+        const double ic = dev + 2.0 * (double)df;
+        if (ic < best_ic) {
+          best_ic = ic;
+          for (arma::uword k = 0; k < K; ++k) { bb1[k] = b1[k]; bb2[k] = b2[k]; }
+        }
+        ++np;
+        // glmnet's truncation: stop after the first lambda whose dev.ratio
+        // exceeds devmax. Guard nulldev == 0 (a word absent from every group).
+        const double devratio = (nulldev > 0.0) ? 1.0 - dev / nulldev : 1.0;
+        if (devratio > devmax) break;
+      }
+
+      // ---- 1.6's damped update ----
+      for (arma::uword k = 0; k < K; ++k) {
+        kt(v, k) = 0.5 * (bb1[k] + kappa_t_old(v, k));
+        ks(v, k) = 0.5 * (bb2[k] + kappa_s_old(v, k));
+      }
+      npath[v] = (double)np; nsweep[v] = (double)n_sweep; nnewton[v] = (double)n_newton;
+    }
+  }
+};
+
+}  // namespace
+
 // phi_list : numGroups matrices, each V x K
 // abar     : numGroups x K, the within-group column means of alpha_s
 // Returns the DAMPED kappa, matching 1.6's kappa <- (coef + kappa)/2.
@@ -200,130 +328,39 @@ Rcpp::List sts_optkappa_cpp(const Rcpp::List& phi_list,
                             int nlambda,
                             double lambda_min_ratio,
                             double devmax,
-                            double tol) {
+                            double tol,
+                            int cores = 1) {
   const int G = phi_list.size();
   std::vector<arma::mat> phi(G);
   for (int g = 0; g < G; ++g) phi[g] = Rcpp::as<arma::mat>(phi_list[g]);
-
   const arma::uword V = phi[0].n_rows;
   const arma::uword K = phi[0].n_cols;
-  const int n = G * (int)K;                 // nobs of the stacked design
-  const double inv_n = 1.0 / (double)n;
+  if (cores < 1) cores = 1;
 
   // offset's word-independent part: log(sum_v phi[[g]][v,k]), safelog'd at
   // -1000 exactly as safelog() in R/helperFunctions.R does.
   arma::mat phi_sum(G, K);
   for (int g = 0; g < G; ++g)
     for (arma::uword k = 0; k < K; ++k) {
-      double s = arma::accu(phi[g].col(k));
-      double l = std::log(s);
+      const double l = std::log(arma::accu(phi[g].col(k)));
       phi_sum(g, k) = (l < -1000.0 || !std::isfinite(l)) ? -1000.0 : l;
     }
-
   const double r = std::pow(lambda_min_ratio, 1.0 / (double)(nlambda - 1));
 
   arma::mat kt(V, K), ks(V, K);
-  // per-(word, topic) data, laid out topic-major so each topic's block is
-  // contiguous: index k*G + g
-  std::vector<double> yv(K * G), Ev(K * G), av(K * G), Yk(K), Yak(K), SEk(K), SaEk(K);
-  std::vector<double> b1(K), b2(K), bb1(K), bb2(K);
-  long npath_total = 0, n_sweep = 0, n_newton = 0;
+  std::vector<double> npath(V), nsweep(V), nnewton(V);
+  OptKappaWorker w(phi, phi_sum, abar, mv, kappa_t_old, kappa_s_old, nlambda,
+                   r, devmax, tol, G, K, kt, ks, npath, nsweep, nnewton);
+  RcppParallel::parallelFor(0, V, w, 16, cores);
 
-  for (arma::uword v = 0; v < V; ++v) {
-    // ---- lambda_max and nulldev over the whole stacked problem ----
-    double gmax = 0.0, nulldev = 0.0;
-    for (arma::uword k = 0; k < K; ++k) {
-      double g_int = 0.0, g_slp = 0.0;
-      for (int g = 0; g < G; ++g) {
-        const double yy = phi[g](v, k);
-        const double oo = phi_sum(g, k) + mv[v];
-        const double mu0 = std::exp(oo);
-        g_int += (mu0 - yy);
-        g_slp += abar(g, k) * (mu0 - yy);
-        nulldev += dev_term(yy, mu0);
-      }
-      gmax = std::max(gmax, std::fabs(g_int));
-      gmax = std::max(gmax, std::fabs(g_slp));
-    }
-    const double lambda_max = gmax * inv_n;
-
-    // ---- per-(word, topic) data, computed once for the whole path ----
-    for (arma::uword k = 0; k < K; ++k) {
-      double Y = 0.0, Ya = 0.0, SE = 0.0, SaE = 0.0;
-      for (int g = 0; g < G; ++g) {
-        const arma::uword i = k * G + g;
-        yv[i] = phi[g](v, k);
-        Ev[i] = std::exp(phi_sum(g, k) + mv[v]);
-        av[i] = abar(g, k);
-        Y += yv[i]; Ya += av[i] * yv[i];
-        SE += Ev[i]; SaE += av[i] * Ev[i];
-      }
-      Yk[k] = Y; Yak[k] = Ya; SEk[k] = SE; SaEk[k] = SaE;
-    }
-
-    // ---- walk the path, tracking AIC ----
-    for (arma::uword k = 0; k < K; ++k) { b1[k] = 0.0; b2[k] = 0.0; }
-    double best_ic = std::numeric_limits<double>::infinity();
-    for (arma::uword k = 0; k < K; ++k) { bb1[k] = 0.0; bb2[k] = 0.0; }
-
-    double lambda = lambda_max;
-    for (int t = 0; t < nlambda; ++t, lambda *= r) {
-      double dev = 0.0;
-      int df = 0;
-
-      // lambda_max is, by definition, the smallest lambda at which every
-      // coefficient is zero, and glmnet sets the first path solution to zero
-      // explicitly. Do the same rather than re-deriving it: the gradient at
-      // zero inside the solver is accumulated as (sum E - sum y) while
-      // lambda_max came from sum(E - y), and the two can differ by an ulp.
-      // On some words that made a ~1e-15 coefficient "enter" at the first
-      // point, adding +2 to its AIC for nothing and moving the AIC choice to
-      // the runner-up -- the cause of the remaining disagreements with glmnet.
-      if (t == 0) { dev = nulldev; df = 0; }
-      else for (arma::uword k = 0; k < K; ++k) {
-        const double* y = &yv[k * G];
-        const double* E = &Ev[k * G];
-        const double* a = &av[k * G];
-        TopicFit tf{ y, E, a, G, (double)n, inv_n, Yk[k], Yak[k], SEk[k], SaEk[k] };
-
-        // warm-started from the previous lambda on the path
-        double c1 = b1[k], c2 = b2[k];
-        tf.solve(c1, c2, lambda, tol, n_sweep, n_newton);
-        b1[k] = c1; b2[k] = c2;
-        if (c1 != 0.0) ++df;
-        if (c2 != 0.0) ++df;
-
-        const double ec1 = std::exp(c1);
-        for (int g = 0; g < G; ++g)
-          dev += dev_term(y[g], E[g] * ec1 * std::exp(c2 * a[g]));
-      }
-
-      const double ic = dev + 2.0 * (double)df;
-      if (ic < best_ic) {
-        best_ic = ic;
-        for (arma::uword k = 0; k < K; ++k) { bb1[k] = b1[k]; bb2[k] = b2[k]; }
-      }
-      ++npath_total;
-
-      // glmnet's truncation: stop after the first lambda whose dev.ratio
-      // exceeds devmax. Guard nulldev == 0 (a word absent from every group).
-      const double devratio = (nulldev > 0.0) ? 1.0 - dev / nulldev : 1.0;
-      if (devratio > devmax) break;
-    }
-
-    // ---- 1.6's damped update ----
-    for (arma::uword k = 0; k < K; ++k) {
-      kt(v, k) = 0.5 * (bb1[k] + kappa_t_old(v, k));
-      ks(v, k) = 0.5 * (bb2[k] + kappa_s_old(v, k));
-    }
-  }
-
+  double tp = 0.0, ts = 0.0, tn = 0.0;
+  for (arma::uword v = 0; v < V; ++v) { tp += npath[v]; ts += nsweep[v]; tn += nnewton[v]; }
   return Rcpp::List::create(
     Rcpp::Named("kappa_t") = kt,
     Rcpp::Named("kappa_s") = ks,
-    Rcpp::Named("meanPath") = (double)npath_total / (double)V,
-    Rcpp::Named("sweepsPerSolve") = (double)n_sweep / (double)(npath_total * K),
-    Rcpp::Named("newtonPerSolve") = (double)n_newton / (double)(npath_total * K));
+    Rcpp::Named("meanPath") = tp / (double)V,
+    Rcpp::Named("sweepsPerSolve") = ts / (tp * (double)K),
+    Rcpp::Named("newtonPerSolve") = tn / (tp * (double)K));
 }
 
 // Single-word diagnostic: the full path the solver walks for one word, in the

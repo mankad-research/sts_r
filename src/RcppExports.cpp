@@ -30,8 +30,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // sts_estep_cpp
-Rcpp::List sts_estep_cpp(const Rcpp::List& documents, const arma::mat& alpha_init, const arma::mat& kappa_t, const arma::mat& kappa_s, const arma::vec& mv, const arma::mat& mu, const arma::mat& Sigma_Inv, double logdet_sigma, const arma::uvec& group, int numGroups, int maxit, int logZMode, double logZSpacing, double logZMargin);
-RcppExport SEXP _sts_sts_estep_cpp(SEXP documentsSEXP, SEXP alpha_initSEXP, SEXP kappa_tSEXP, SEXP kappa_sSEXP, SEXP mvSEXP, SEXP muSEXP, SEXP Sigma_InvSEXP, SEXP logdet_sigmaSEXP, SEXP groupSEXP, SEXP numGroupsSEXP, SEXP maxitSEXP, SEXP logZModeSEXP, SEXP logZSpacingSEXP, SEXP logZMarginSEXP) {
+Rcpp::List sts_estep_cpp(const Rcpp::List& documents, const arma::mat& alpha_init, const arma::mat& kappa_t, const arma::mat& kappa_s, const arma::vec& mv, const arma::mat& mu, const arma::mat& Sigma_Inv, double logdet_sigma, const arma::uvec& group, int numGroups, int maxit, int logZMode, double logZSpacing, double logZMargin, int cores);
+RcppExport SEXP _sts_sts_estep_cpp(SEXP documentsSEXP, SEXP alpha_initSEXP, SEXP kappa_tSEXP, SEXP kappa_sSEXP, SEXP mvSEXP, SEXP muSEXP, SEXP Sigma_InvSEXP, SEXP logdet_sigmaSEXP, SEXP groupSEXP, SEXP numGroupsSEXP, SEXP maxitSEXP, SEXP logZModeSEXP, SEXP logZSpacingSEXP, SEXP logZMarginSEXP, SEXP coresSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -49,13 +49,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type logZMode(logZModeSEXP);
     Rcpp::traits::input_parameter< double >::type logZSpacing(logZSpacingSEXP);
     Rcpp::traits::input_parameter< double >::type logZMargin(logZMarginSEXP);
-    rcpp_result_gen = Rcpp::wrap(sts_estep_cpp(documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma_Inv, logdet_sigma, group, numGroups, maxit, logZMode, logZSpacing, logZMargin));
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(sts_estep_cpp(documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma_Inv, logdet_sigma, group, numGroups, maxit, logZMode, logZSpacing, logZMargin, cores));
     return rcpp_result_gen;
 END_RCPP
 }
 // sts_optkappa_cpp
-Rcpp::List sts_optkappa_cpp(const Rcpp::List& phi_list, const arma::mat& abar, const arma::vec& mv, const arma::mat& kappa_t_old, const arma::mat& kappa_s_old, int nlambda, double lambda_min_ratio, double devmax, double tol);
-RcppExport SEXP _sts_sts_optkappa_cpp(SEXP phi_listSEXP, SEXP abarSEXP, SEXP mvSEXP, SEXP kappa_t_oldSEXP, SEXP kappa_s_oldSEXP, SEXP nlambdaSEXP, SEXP lambda_min_ratioSEXP, SEXP devmaxSEXP, SEXP tolSEXP) {
+Rcpp::List sts_optkappa_cpp(const Rcpp::List& phi_list, const arma::mat& abar, const arma::vec& mv, const arma::mat& kappa_t_old, const arma::mat& kappa_s_old, int nlambda, double lambda_min_ratio, double devmax, double tol, int cores);
+RcppExport SEXP _sts_sts_optkappa_cpp(SEXP phi_listSEXP, SEXP abarSEXP, SEXP mvSEXP, SEXP kappa_t_oldSEXP, SEXP kappa_s_oldSEXP, SEXP nlambdaSEXP, SEXP lambda_min_ratioSEXP, SEXP devmaxSEXP, SEXP tolSEXP, SEXP coresSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -68,7 +69,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type lambda_min_ratio(lambda_min_ratioSEXP);
     Rcpp::traits::input_parameter< double >::type devmax(devmaxSEXP);
     Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
-    rcpp_result_gen = Rcpp::wrap(sts_optkappa_cpp(phi_list, abar, mv, kappa_t_old, kappa_s_old, nlambda, lambda_min_ratio, devmax, tol));
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(sts_optkappa_cpp(phi_list, abar, mv, kappa_t_old, kappa_s_old, nlambda, lambda_min_ratio, devmax, tol, cores));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -191,8 +193,8 @@ END_RCPP
 
 static const R_CallMethodDef CallEntries[] = {
     {"_sts_sts_logZ_probe", (DL_FUNC) &_sts_sts_logZ_probe, 8},
-    {"_sts_sts_estep_cpp", (DL_FUNC) &_sts_sts_estep_cpp, 14},
-    {"_sts_sts_optkappa_cpp", (DL_FUNC) &_sts_sts_optkappa_cpp, 9},
+    {"_sts_sts_estep_cpp", (DL_FUNC) &_sts_sts_estep_cpp, 15},
+    {"_sts_sts_optkappa_cpp", (DL_FUNC) &_sts_sts_optkappa_cpp, 10},
     {"_sts_sts_poislasso_path_cpp", (DL_FUNC) &_sts_sts_poislasso_path_cpp, 7},
     {"_sts_stm_lhoodcpp", (DL_FUNC) &_sts_stm_lhoodcpp, 5},
     {"_sts_stm_gradcpp", (DL_FUNC) &_sts_stm_gradcpp, 5},

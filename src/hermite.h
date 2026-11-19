@@ -40,6 +40,7 @@
 #define STS_HERMITE_H
 
 #include <RcppArmadillo.h>
+#include <RcppParallel.h>
 #include <atomic>
 #include <vector>
 #include "normalizer.h"
@@ -51,7 +52,7 @@ public:
   // a_lo/a_hi bracket the alpha_s values the E-step is expected to visit;
   // spacing is the grid step h.
   HermiteNormalizer(const arma::mat& lin_base, const arma::mat& kappa_s,
-                    double a_lo, double a_hi, double spacing)
+                    double a_lo, double a_hi, double spacing, int cores = 1)
     : exact_(lin_base, kappa_s), K_(lin_base.n_cols),
       a_lo_(a_lo), h_(spacing), n_out_(0) {
     // Node count chosen so that the last node is at or beyond a_hi.
@@ -63,12 +64,11 @@ public:
     d1_.set_size(n_nodes_, K_);
     d2_.set_size(n_nodes_, K_);
 
-    for (arma::uword k = 0; k < K_; ++k) {
-      for (arma::uword j = 0; j < n_nodes_; ++j) {
-        const LogZTriple t = exact_.eval(k, a_lo_ + j * h_);
-        f_(j, k) = t.f; d1_(j, k) = t.d1; d2_(j, k) = t.d2;
-      }
-    }
+    // Every node is an independent exact evaluation, so the table is built
+    // in parallel over nodes; each entry is computed identically whatever the
+    // thread count, so the table is too.
+    TableWorker w(*this);
+    RcppParallel::parallelFor(0, n_nodes_, w, 8, cores < 1 ? 1 : cores);
   }
 
   LogZTriple eval(unsigned int k, double a) const {
@@ -130,6 +130,18 @@ public:
   long n_outside() const { return n_out_.load(std::memory_order_relaxed); }
 
 private:
+  struct TableWorker : public RcppParallel::Worker {
+    HermiteNormalizer& hn;
+    explicit TableWorker(HermiteNormalizer& hn_) : hn(hn_) {}
+    void operator()(std::size_t j0, std::size_t j1) {
+      for (std::size_t j = j0; j < j1; ++j)
+        for (arma::uword k = 0; k < hn.K_; ++k) {
+          const LogZTriple t = hn.exact_.eval(k, hn.a_lo_ + j * hn.h_);
+          hn.f_(j, k) = t.f; hn.d1_(j, k) = t.d1; hn.d2_(j, k) = t.d2;
+        }
+    }
+  };
+
   ExactNormalizer exact_;
   arma::uword K_, n_nodes_;
   double a_lo_, a_hi_, h_;

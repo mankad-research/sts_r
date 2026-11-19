@@ -52,7 +52,8 @@
 #' approximation to the multinomial.  See Chen and Mankad (2025) on the implementation here.
 #' @param verbose A logical flag indicating whether information should be
 #' printed to the screen.  
-#' @param parallelize A logical flag indicating whether to parallelize the estimation using all but one CPU cores on your local machine. 
+#' @param parallelize Deprecated; use \code{cores}. \code{TRUE} is treated
+#' as \code{cores = parallel::detectCores() - 1} with a warning.
 #' @param stmSeed A prefit STM model object (e.g., from \code{stm::stm()} with 
 #' \code{initializationVar} as the content covariate) to initialize the STS model. 
 #' Note this is ignored unless initialization = "stm"
@@ -134,7 +135,7 @@
 #' ## low max iteration number just for testing
 #' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 1, verbose = FALSE)
 #' @export
-sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2, allow.neg.change = FALSE, patience = 1L, kappaSolver = c("cpp", "glmnet")) {
+sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2, allow.neg.change = FALSE, patience = 1L, kappaSolver = c("cpp", "glmnet"), cores = getOption("sts.cores", 1L)) {
 
   # if (!is.null(seed)) {set.seed(seed)}
   if (!(is.character(initialization) && length(initialization) == 1 &&
@@ -153,6 +154,17 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     stop("patience must be a single integer >= 1.")
   patience <- as.integer(patience)
   kappaSolver <- match.arg(kappaSolver)
+  if (!(is.numeric(cores) && length(cores) == 1 && !is.na(cores) && cores >= 1))
+    stop("cores must be a single integer >= 1.")
+  cores <- as.integer(cores)
+  if (isTRUE(parallelize)) {
+    ## 1.6 started a PSOCK cluster on detectCores() - 1 workers and ran
+    ## foreach() with one task per document and per word; per-task overhead
+    ## dominated. 1.7 threads both steps in C++ instead.
+    warning("'parallelize' is deprecated; use 'cores' to set the number of ",
+            "threads. Using cores = parallel::detectCores() - 1.", call. = FALSE)
+    cores <- max(1L, parallel::detectCores() - 1L)
+  }
   if(inherits(prevalence_sentiment,"formula")) {
     X <- model.matrix(prevalence_sentiment, data = corpus$meta)[,-1, drop = FALSE]
   } else {
@@ -164,12 +176,6 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     X_seed <- initializationVar
   }
   
-  if (parallelize) {
-    ## Only the kappa M-step still uses the foreach backend; the E-step is
-    ## threaded inside C++ (see src/estep.cpp).
-    cl <- parallel::makeCluster(parallel::detectCores() - 1)
-    doParallel::registerDoParallel(cl)
-  }
 
 
   conv_criteria <- convTol
@@ -245,7 +251,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
 
   ## estimate kappa 
   if (initialization == "anchor") {
-    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, c_d_bar = c_d_bar, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, phiD =phiD, parallelize = parallelize, solver = kappaSolver)
+    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, c_d_bar = c_d_bar, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, phiD =phiD, solver = kappaSolver, cores = cores)
     kappa.est$kappa_t[which(kappa.est$kappa_t == 0)] <- sign(rnorm(sum(kappa.est$kappa_t == 0)))*1e-4
     kappa.est$kappa_s[which(kappa.est$kappa_s == 0)] <- sign(rnorm(sum(kappa.est$kappa_s == 0)))*1e-4
   } else {
@@ -328,7 +334,8 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
       maxit        = 500L,
       logZMode     = logZmode_num,
       logZSpacing  = logZSpacing,
-      logZMargin   = logZMargin)
+      logZMargin   = logZMargin,
+      cores        = cores)
 
     alpha.est <- estep$alpha
     sigma.ss  <- estep$sigma_ss
@@ -352,7 +359,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     sigma.chol <- chol(sigma)
     Sigma_Inv.est <- chol2inv(sigma.chol)
     
-    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, c_d_bar = c_d_bar, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, phiD =phiD, parallelize = parallelize, solver = kappaSolver)
+    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, c_d_bar = c_d_bar, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, phiD =phiD, solver = kappaSolver, cores = cores)
     
     if(verbose) {
       #M-step message
@@ -472,10 +479,6 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     achange = achange_vec[1:(iter - 1)],
     kchange = kchange_vec[1:(iter - 1)])
   final.est$bestIter <- if (allow.neg.change) length(elbo_path) else best_iter
-  if (parallelize) {
-    # Stop the cluster when done
-    parallel::stopCluster(cl)
-  }
   class(final.est) <- "STS"
 
   return(final.est)

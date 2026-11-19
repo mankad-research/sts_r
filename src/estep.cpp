@@ -275,7 +275,7 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
   arma::mat sigma_ss(P, P, arma::fill::zeros);
   arma::mat phiD(D, K, arma::fill::zeros);
   std::vector<arma::mat> phi(numGroups, arma::mat(V, K, arma::fill::zeros));
-  double elbo = 0.0;
+  double elbo = 0.0, elbo_obj = 0.0, elbo_lap = 0.0;
   long fncount = 0, grcount = 0, nfail = 0, ncholfix = 0;
 
   for (arma::uword d = 0; d < D; ++d) {
@@ -310,6 +310,11 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
     arma::mat Ri = arma::inv(arma::trimatu(R));
     sigma_ss += Ri * Ri.t();                                 // == chol2inv(R)
     elbo += prob.objective() + 0.5 * (arma::accu(arma::log(R.diag())) - logdet_sigma);
+    // Decomposition, for diagnosing the non-monotone bound: the data-fit term
+    // (the per-document log-posterior at its mode) and the Laplace term are
+    // tracked separately so it is visible which one declines.
+    elbo_obj += prob.objective();
+    elbo_lap += 0.5 * (arma::accu(arma::log(R.diag())) - logdet_sigma);
 
     // phi accumulation reuses beta_bar: no further softmax over V.
     const arma::mat& bb = prob.beta_bar();
@@ -325,6 +330,8 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
   return Rcpp::List::create(
     Rcpp::Named("alpha")    = alpha,
     Rcpp::Named("elbo")     = elbo,
+    Rcpp::Named("elboObj")  = elbo_obj,
+    Rcpp::Named("elboLap")  = elbo_lap,
     Rcpp::Named("sigma_ss") = sigma_ss,
     Rcpp::Named("phi")      = phi_out,
     Rcpp::Named("phiD")     = phiD,

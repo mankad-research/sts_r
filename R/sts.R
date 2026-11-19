@@ -253,6 +253,10 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
   }
   
   elbo_vec <- achange_vec <- kchange_vec <- rep(NA, maxIter)
+  ## Bound decomposition per iteration: the data-fit term (sum over documents
+  ## of the log-posterior at its mode) and the Laplace term.  1.6 computed the
+  ## total only; keeping the parts makes a declining bound diagnosable.
+  elboObj_vec <- elboLap_vec <- rep(NA, maxIter)
   ## best-bound tracking and the consecutive-decrease counter (see the
   ## convergence block below)
   best_elbo  <- -Inf
@@ -360,6 +364,8 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     }
     
     elbo_vec[iter] <- elbo
+    elboObj_vec[iter] <- estep$elboObj
+    elboLap_vec[iter] <- estep$elboLap
     if (iter == 1) {
       msg <- sprintf("Completing Iteration %i (approx. per word bound = %.3f) \n", 
                      iter, elbo/ntokens) 
@@ -455,6 +461,15 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
   }
 
   final.est <- list(alpha = alpha.est, gamma = Gamma.est, kappa = kappa.est, sigma_inv = Sigma_Inv.est, sigma = sigma, elbo = elbo_path, mv = mv, runtime = proc.time()[3] - timer_full, vocab = mod.out$vocab, mu = mu$mu)
+  ## Per-iteration diagnostics (new in 1.7): the bound's two components and
+  ## the mean relative change in alpha and kappa.
+  final.est$diagnostics <- data.frame(
+    iter    = seq_len(iter - 1),
+    elbo    = elbo_path,
+    elboObj = elboObj_vec[1:(iter - 1)],
+    elboLap = elboLap_vec[1:(iter - 1)],
+    achange = achange_vec[1:(iter - 1)],
+    kchange = kchange_vec[1:(iter - 1)])
   final.est$bestIter <- if (allow.neg.change) length(elbo_path) else best_iter
   if (parallelize) {
     # Stop the cluster when done

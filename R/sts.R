@@ -95,13 +95,18 @@
 #' ## low max iteration number just for testing
 #' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 1, verbose = FALSE)
 #' @export
-sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL) {
+sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2) {
 
   # if (!is.null(seed)) {set.seed(seed)}
   if (!(is.character(initialization) && length(initialization) == 1 &&
         initialization %in% c("anchor", "stm"))) {
     stop("initialization must be either \"anchor\" or \"stm\".")
   }
+  logZ <- match.arg(logZ)
+  if (!(is.numeric(logZSpacing) && length(logZSpacing) == 1 && logZSpacing > 0))
+    stop("logZSpacing must be a single positive number.")
+  if (!(is.numeric(logZMargin) && length(logZMargin) == 1 && logZMargin >= 0))
+    stop("logZMargin must be a single non-negative number.")
   if(inherits(prevalence_sentiment,"formula")) {
     X <- model.matrix(prevalence_sentiment, data = corpus$meta)[,-1, drop = FALSE]
   } else {
@@ -206,8 +211,33 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
   ntokens <- sum(mod.out$settings$dim$wcounts$x)
   converge <- FALSE
   iter <- 1
+  ## ------------------- log-partition backend selection -------------------
+  ## Both backends cost O(V*K) per evaluation, so the trade-off is purely the
+  ## number of evaluations: the exact path sweeps V once per topic on every
+  ## objective evaluation (roughly 20 per document per E-step in practice),
+  ## while the table sweeps V once per topic per grid node and then
+  ## interpolates.  The table therefore pays off when 20*D comfortably
+  ## exceeds the node count, which is a statement about D alone -- V and K
+  ## cancel.  "auto" requires a 4x margin before switching.
+  alpha_s_rng <- range(alpha.est[, 1:K + K - 1])
+  logZnodes_est <- ceiling((diff(alpha_s_rng) + 2 * logZMargin) / logZSpacing) + 1
+  evals_est <- 20 * D
+  logZmode_num <- switch(logZ,
+    exact        = 0L,
+    interpolated = 1L,
+    auto         = if (evals_est > 4 * logZnodes_est) 1L else 0L)
+  if (verbose) {
+    if (logZmode_num == 1L) {
+      cat(sprintf("Log-partition: interpolated (h = %g, ~%d nodes; est. %dx fewer V-sweeps).\n",
+                  logZSpacing, logZnodes_est, round(evals_est / logZnodes_est)))
+    } else {
+      cat(sprintf("Log-partition: exact%s.\n",
+                  if (logZ == "auto") " (corpus too small for the table to pay off)" else ""))
+    }
+  }
+
   if (verbose) {cat("Done.\nStarting Estimation...\n")}
-  timer_full <- proc.time()[3]  
+  timer_full <- proc.time()[3]
 
   while (iter <= maxIter & !converge) {
     t1 <- proc.time()[3]
@@ -239,7 +269,10 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
       logdet_sigma = as.numeric(determinant(sigma, logarithm = TRUE)$modulus),
       group        = as.integer(group),
       numGroups    = as.integer(numGroups),
-      maxit        = 500L)
+      maxit        = 500L,
+      logZMode     = logZmode_num,
+      logZSpacing  = logZSpacing,
+      logZMargin   = logZMargin)
 
     alpha.est <- estep$alpha
     sigma.ss  <- estep$sigma_ss

@@ -23,11 +23,51 @@
 // bit-for-bit, because sums are accumulated in a different order.
 
 #include <RcppArmadillo.h>
+#include <memory>
 #include "normalizer.h"
+#include "hermite.h"
 #include "vmmin.h"
 // [[Rcpp::depends(RcppArmadillo)]]
 
 using namespace sts;
+
+// Direct access to the two normalizer backends, for the accuracy and
+// convergence-rate tests in tests/testthat and for the error analysis.
+// mode 0 = exact (one pass over V), mode 1 = quintic Hermite table.
+// [[Rcpp::export]]
+Rcpp::List sts_logZ_probe(const arma::mat& kappa_t, const arma::mat& kappa_s,
+                          const arma::vec& mv, const arma::vec& avals,
+                          int mode, double a_lo, double a_hi, double spacing) {
+  const arma::uword V = mv.n_elem, K = kappa_t.n_cols, n = avals.n_elem;
+  arma::mat lin_base(V, K);
+  for (arma::uword k = 0; k < K; ++k) lin_base.col(k) = mv + kappa_t.col(k);
+
+  ExactNormalizer ex(lin_base, kappa_s);
+  arma::mat f(n, K), d1(n, K), d2(n, K);
+  double nodes = NA_REAL, lo = NA_REAL, hi = NA_REAL, nout = NA_REAL;
+
+  if (mode == 0) {
+    for (arma::uword i = 0; i < n; ++i)
+      for (arma::uword k = 0; k < K; ++k) {
+        const LogZTriple t = ex.eval(k, avals[i]);
+        f(i, k) = t.f; d1(i, k) = t.d1; d2(i, k) = t.d2;
+      }
+  } else {
+    HermiteNormalizer hm(lin_base, kappa_s, a_lo, a_hi, spacing);
+    for (arma::uword i = 0; i < n; ++i)
+      for (arma::uword k = 0; k < K; ++k) {
+        const LogZTriple t = hm.eval(k, avals[i]);
+        f(i, k) = t.f; d1(i, k) = t.d1; d2(i, k) = t.d2;
+      }
+    nodes = (double)hm.n_nodes(); lo = hm.range_lo(); hi = hm.range_hi();
+    nout = (double)hm.n_outside();
+  }
+
+  return Rcpp::List::create(
+    Rcpp::Named("f") = f, Rcpp::Named("d1") = d1, Rcpp::Named("d2") = d2,
+    Rcpp::Named("n_nodes") = nodes, Rcpp::Named("lo") = lo,
+    Rcpp::Named("hi") = hi, Rcpp::Named("n_outside") = nout);
+}
 
 // --------------------------------------------------------------------------
 // One document's variational problem: objective, gradient and Hessian, all
@@ -198,7 +238,10 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
                          double logdet_sigma,
                          const arma::uvec& group,
                          int numGroups,
-                         int maxit) {
+                         int maxit,
+                         int logZMode,
+                         double logZSpacing,
+                         double logZMargin) {
   const arma::uword D = documents.size();
   const arma::uword V = mv.n_elem;
   const arma::uword K = kappa_t.n_cols;
@@ -208,7 +251,25 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
   arma::mat lin_base(V, K);
   for (arma::uword k = 0; k < K; ++k) lin_base.col(k) = mv + kappa_t.col(k);
 
-  ExactNormalizer nrm(lin_base, kappa_s);
+  // Normalizer backend.  logZMode 0 keeps the exact pass over V; mode 1
+  // tabulates logZ, logZ' and logZ'' once for this E-step over the range of
+  // alpha_s the documents currently occupy, padded by logZMargin, and
+  // interpolates.  Anything outside the table still goes to the exact
+  // backend, so no value is ever extrapolated.
+  double a_lo = 0.0, a_hi = 0.0;
+  if (logZMode == 1) {
+    const arma::mat as = alpha_init.cols(K - 1, P - 1);
+    a_lo = as.min() - logZMargin;
+    a_hi = as.max() + logZMargin;
+  }
+  ExactNormalizer   nrm_exact(lin_base, kappa_s);
+  std::unique_ptr<HermiteNormalizer> nrm_herm;
+  if (logZMode == 1) {
+    nrm_herm.reset(new HermiteNormalizer(lin_base, kappa_s, a_lo, a_hi, logZSpacing));
+  }
+  const Normalizer& nrm = (logZMode == 1)
+      ? static_cast<const Normalizer&>(*nrm_herm)
+      : static_cast<const Normalizer&>(nrm_exact);
 
   arma::mat alpha = alpha_init;
   arma::mat sigma_ss(P, P, arma::fill::zeros);
@@ -270,5 +331,9 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
     Rcpp::Named("fncount")  = (double)fncount,
     Rcpp::Named("grcount")  = (double)grcount,
     Rcpp::Named("nfail")    = (double)nfail,
-    Rcpp::Named("ncholfix") = (double)ncholfix);
+    Rcpp::Named("ncholfix") = (double)ncholfix,
+    Rcpp::Named("logZNodes")   = logZMode == 1 ? (double)nrm_herm->n_nodes() : NA_REAL,
+    Rcpp::Named("logZOutside") = logZMode == 1 ? (double)nrm_herm->n_outside() : NA_REAL,
+    Rcpp::Named("logZLo")      = logZMode == 1 ? a_lo : NA_REAL,
+    Rcpp::Named("logZHi")      = logZMode == 1 ? a_hi : NA_REAL);
 }

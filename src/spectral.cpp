@@ -16,6 +16,7 @@
 
 #include <RcppArmadillo.h>
 #include <RcppParallel.h>
+#include "fpu.h"
 #include <vector>
 #include <cmath>
 // [[Rcpp::depends(RcppArmadillo, RcppParallel)]]
@@ -24,10 +25,12 @@ namespace {
 
 // rowSums(Q^2) with R's accumulation: long double per row, columns in order.
 struct RowSqWorker : public RcppParallel::Worker {
+  FpuState fpu_;   // x87 state of the constructing (main) thread; see fpu.h
   const arma::mat& Q;
   std::vector<double>& out;
   RowSqWorker(const arma::mat& Q_, std::vector<double>& out_) : Q(Q_), out(out_) {}
   void operator()(std::size_t i0, std::size_t i1) {
+    FpuGuard fpu_guard(fpu_);
     const arma::uword V = Q.n_cols;
     for (std::size_t i = i0; i < i1; ++i) {
       long double acc = 0.0L;
@@ -43,12 +46,14 @@ struct RowSqWorker : public RcppParallel::Worker {
 
 // Qbar <- Qbar - ip %o% q, column by column (disjoint columns per thread).
 struct Rank1Worker : public RcppParallel::Worker {
+  FpuState fpu_;   // x87 state of the constructing (main) thread; see fpu.h
   arma::mat& Q;
   const std::vector<double>& ip;
   const std::vector<double>& q;
   Rank1Worker(arma::mat& Q_, const std::vector<double>& ip_, const std::vector<double>& q_)
     : Q(Q_), ip(ip_), q(q_) {}
   void operator()(std::size_t j0, std::size_t j1) {
+    FpuGuard fpu_guard(fpu_);
     const arma::uword V = Q.n_rows;
     for (std::size_t j = j0; j < j1; ++j) {
       double* col = Q.colptr(j);
@@ -113,6 +118,7 @@ namespace {
 // One word's exponentiated-gradient fit, as stm's expgrad() with L2 loss.
 // ytX: that word's row of Qbar %*% t(X) (K); XtX: K x K.
 struct ExpgradWorker : public RcppParallel::Worker {
+  FpuState fpu_;   // x87 state of the constructing (main) thread; see fpu.h
   const arma::mat& ytX;      // V x K
   const arma::mat& XtX;      // K x K
   const std::vector<int>& anchor_pos;   // -1, or position among the anchors
@@ -125,6 +131,7 @@ struct ExpgradWorker : public RcppParallel::Worker {
     : ytX(ytX_), XtX(XtX_), anchor_pos(ap), tol(tol_), max_its(max_its_), W(W_), its_out(its_) {}
 
   void operator()(std::size_t i0, std::size_t i1) {
+    FpuGuard fpu_guard(fpu_);
     const int K = (int)XtX.n_rows;
     std::vector<double> alpha(K), grad(K), z(K), yx(K);
     for (std::size_t i = i0; i < i1; ++i) {

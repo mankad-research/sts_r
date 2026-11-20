@@ -30,6 +30,7 @@
 
 #include <RcppArmadillo.h>
 #include <RcppParallel.h>
+#include "fpu.h"
 #include <vector>
 #include <cmath>
 // [[Rcpp::depends(RcppArmadillo, RcppParallel)]]
@@ -282,6 +283,7 @@ inline double solve_point(const TopicFit& tf, double& c1, double& c2, double lam
 namespace {
 
 struct OptKappaWorker : public RcppParallel::Worker {
+  FpuState fpu_;   // x87 state of the constructing (main) thread; see fpu.h
   const std::vector<arma::mat>& phi;      // numGroups x (V x K)
   const arma::mat& phi_sum;               // G x K
   const arma::mat& abar;                  // G x K
@@ -316,6 +318,7 @@ struct OptKappaWorker : public RcppParallel::Worker {
       lambda_sel(lambda_sel_) {}
 
   void operator()(std::size_t v0, std::size_t v1) {
+    FpuGuard fpu_guard(fpu_);
     const int n = G * (int)K;
     const double inv_n = 1.0 / (double)n;
     // per-thread scratch, laid out topic-major (index k*G + g)

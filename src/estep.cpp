@@ -24,6 +24,7 @@
 
 #include <RcppArmadillo.h>
 #include <RcppParallel.h>
+#include "fpu.h"
 #include <memory>
 #include <string>
 #include "normalizer.h"
@@ -325,6 +326,7 @@ struct BlockOut {
 };
 
 struct EstepWorker : public RcppParallel::Worker {
+  FpuState fpu_;   // x87 state of the constructing (main) thread; see fpu.h
   const std::vector<arma::uvec>& ind;
   const std::vector<arma::vec>&  cnt;
   const Normalizer& nrm;
@@ -355,6 +357,7 @@ struct EstepWorker : public RcppParallel::Worker {
       out(out_), P(P_) {}
 
   void operator()(std::size_t b0, std::size_t b1) {
+    FpuGuard fpu_guard(fpu_);
     for (std::size_t b = b0; b < b1; ++b) {
       BlockOut& bo = out[b];
       bo.sigma_ss.zeros(P, P);
@@ -422,6 +425,7 @@ struct EstepWorker : public RcppParallel::Worker {
 // Second pass: phi, parallel over vocabulary words. Replicates the arithmetic
 // of DocProblem::prepare() at the optimum exactly, row by row.
 struct PhiWorker : public RcppParallel::Worker {
+  FpuState fpu_;   // x87 state of the constructing (main) thread; see fpu.h
   const std::vector<arma::uword>& wptr;   // CSR: documents containing word v
   const std::vector<arma::uword>& wdoc;
   const std::vector<double>&      wcnt;
@@ -441,6 +445,7 @@ struct PhiWorker : public RcppParallel::Worker {
       alpha(alpha_), lZ_opt(lZ_opt_), group(group_), phi(phi_), K(K_) {}
 
   void operator()(std::size_t v0, std::size_t v1) {
+    FpuGuard fpu_guard(fpu_);
     std::vector<double> t(K);
     for (std::size_t v = v0; v < v1; ++v) {
       for (arma::uword p = wptr[v]; p < wptr[v + 1]; ++p) {

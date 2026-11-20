@@ -41,6 +41,7 @@
 
 #include <RcppArmadillo.h>
 #include <RcppParallel.h>
+#include "fpu.h"
 #include <atomic>
 #include <vector>
 #include "normalizer.h"
@@ -131,9 +132,11 @@ public:
 
 private:
   struct TableWorker : public RcppParallel::Worker {
+    FpuState fpu_;   // x87 state of the constructing (main) thread; see fpu.h
     HermiteNormalizer& hn;
     explicit TableWorker(HermiteNormalizer& hn_) : hn(hn_) {}
     void operator()(std::size_t j0, std::size_t j1) {
+      FpuGuard fpu_guard(fpu_);
       for (std::size_t j = j0; j < j1; ++j)
         for (arma::uword k = 0; k < hn.K_; ++k) {
           const LogZTriple t = hn.exact_.eval(k, hn.a_lo_ + j * hn.h_);

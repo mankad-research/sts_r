@@ -1,4 +1,4 @@
-#' Gadarian and Albertson data
+#' Gadarian and Albertson Data
 #'
 #' This data set contains variables from Gadarian and Albertson (2014). The
 #' experiment had those in the treatment condition write about what made them

@@ -27,7 +27,7 @@
 ## Only the elements of the fitted object that sts uses are returned, using
 ## the same names and structure as an STM object.
 stmInit <- function(documents, vocab, K, X, content = NULL, max.em.its = 0,
-                    emtol = 1e-5) {
+                    emtol = 1e-5, cores = 1L) {
   ## ---- checks on the documents (as in stm::stm) ----
   if (!is.list(documents)) stop("documents must be a list, see documentation.")
   if (!all(unlist(lapply(documents, is.matrix)))) {
@@ -80,7 +80,7 @@ stmInit <- function(documents, vocab, K, X, content = NULL, max.em.its = 0,
 
   ## ---- spectral initialization ----
   maxV <- if (V > 10000) 10000 else NULL
-  beta <- spectralInit(documents, K, V, maxV = maxV)
+  beta <- spectralInit(documents, K, V, maxV = maxV, cores = cores)
   beta <- list(beta = rep(list(beta), A))
   mu <- list(mu = matrix(0, nrow = (K - 1), ncol = 1))
   sigma <- diag(20, nrow = (K - 1))
@@ -119,7 +119,7 @@ stmInit <- function(documents, vocab, K, X, content = NULL, max.em.its = 0,
 
 ## Spectral (anchor word) initialization of the K x V topic-word matrix
 ## (stm.init with mode = "Spectral").
-spectralInit <- function(documents, K, V, maxV = NULL) {
+spectralInit <- function(documents, K, V, maxV = NULL, cores = 1L) {
   if (K >= V) stop("Spectral initialization cannot be used for the overcomplete case (K greater than or equal to number of words in vocab)")
   docs <- doc.to.ijv(documents)
   mat <- Matrix::sparseMatrix(docs$i, docs$j, x = docs$v)
@@ -146,8 +146,8 @@ spectralInit <- function(documents, K, V, maxV = NULL) {
     wprob <- wprob[-temp.remove]
   }
   Q <- Q / Qsums
-  anchor <- fastAnchor(Q, K = K)
-  beta <- recoverL2(Q, anchor, wprob)$A
+  anchor <- fastAnchor(Q, K = K, cores = cores)
+  beta <- recoverL2(Q, anchor, wprob, cores = cores)$A
   if (!is.null(keep)) {
     beta.new <- matrix(0, nrow = K, ncol = V)
     beta.new[, keep] <- beta
@@ -168,8 +168,17 @@ gram <- function(mat) {
   as.matrix(Q)
 }
 
-## Greedy anchor word selection (stabilized Gram-Schmidt)
-fastAnchor <- function(Qbar, K) {
+## Greedy anchor word selection (stabilized Gram-Schmidt).
+## The work is done in C++ (src/spectral.cpp): the R version below (kept as
+## fastAnchor_R for tests) allocates several dense V x V temporaries on each of
+## its K passes (Qbar^2, the outer product, the difference), ~2 GB peak at
+## V = 6084; the C++ version updates one copy in place and reproduces R's
+## arithmetic exactly, so the anchors are identical.
+fastAnchor <- function(Qbar, K, cores = 1L) {
+  sts_fastanchor_cpp(Qbar, as.integer(K), as.integer(cores))
+}
+
+fastAnchor_R <- function(Qbar, K) {
   basis <- c()
   rowSquaredSums <- rowSums(Qbar^2)
   for (i in 1:K) {
@@ -187,8 +196,23 @@ fastAnchor <- function(Qbar, K) {
   basis
 }
 
-## RecoverL2 procedure of Arora et al. (exponentiated gradient solver)
-recoverL2 <- function(Qbar, anchor, wprob) {
+## RecoverL2 procedure of Arora et al. (exponentiated gradient solver).
+## The per-word exponentiated-gradient fits run in C++, in parallel over words
+## (src/spectral.cpp), reproducing expgrad()'s arithmetic; the products they
+## need are formed here exactly as expgrad() would form them. The R version is
+## kept as recoverL2_R for tests.
+recoverL2 <- function(Qbar, anchor, wprob, cores = 1L) {
+  X    <- Qbar[anchor, ]
+  XtX  <- tcrossprod(X)
+  ytX  <- Qbar %*% t(X)     # row i is y %*% t(X) for y = Qbar[i, ], as in expgrad()
+  W    <- sts_expgrad_rows_cpp(ytX, XtX, as.integer(anchor), 1e-7, 500L,
+                               as.integer(cores))$weights
+  A <- W * wprob
+  A <- t(A) / colSums(A)
+  list(A = A)
+}
+
+recoverL2_R <- function(Qbar, anchor, wprob) {
   X <- Qbar[anchor, ]
   XtX <- tcrossprod(X)
   condprob <- vector(mode = "list", length = nrow(Qbar))
@@ -324,7 +348,7 @@ stmMnreg <- function(beta.ss, K, A, wcounts, interactions = TRUE,
     offset2 <- m[i] + offset
     mod <- NULL
     while (is.null(mod)) {
-      mod <- tryCatch(glmnet::glmnet(x = covar, y = counts[[i]], family = "poisson",
+      mod <- tryCatch(.glmnet_fit(x = covar, y = counts[[i]], family = "poisson",
                                      offset = offset2, standardize = FALSE,
                                      intercept = FALSE,
                                      lambda.min.ratio = lambda.min.ratio,

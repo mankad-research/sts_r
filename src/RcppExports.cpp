@@ -11,6 +11,119 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// sts_logZ_probe
+Rcpp::List sts_logZ_probe(const arma::mat& kappa_t, const arma::mat& kappa_s, const arma::vec& mv, const arma::vec& avals, int mode, double a_lo, double a_hi, double spacing);
+RcppExport SEXP _sts_sts_logZ_probe(SEXP kappa_tSEXP, SEXP kappa_sSEXP, SEXP mvSEXP, SEXP avalsSEXP, SEXP modeSEXP, SEXP a_loSEXP, SEXP a_hiSEXP, SEXP spacingSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type kappa_t(kappa_tSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type kappa_s(kappa_sSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type mv(mvSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type avals(avalsSEXP);
+    Rcpp::traits::input_parameter< int >::type mode(modeSEXP);
+    Rcpp::traits::input_parameter< double >::type a_lo(a_loSEXP);
+    Rcpp::traits::input_parameter< double >::type a_hi(a_hiSEXP);
+    Rcpp::traits::input_parameter< double >::type spacing(spacingSEXP);
+    rcpp_result_gen = Rcpp::wrap(sts_logZ_probe(kappa_t, kappa_s, mv, avals, mode, a_lo, a_hi, spacing));
+    return rcpp_result_gen;
+END_RCPP
+}
+// sts_estep_cpp
+Rcpp::List sts_estep_cpp(const Rcpp::List& documents, const arma::mat& alpha_init, const arma::mat& kappa_t, const arma::mat& kappa_s, const arma::vec& mv, const arma::mat& mu, const arma::mat& Sigma_Inv, double logdet_sigma, const arma::uvec& group, int numGroups, int maxit, int logZMode, double logZSpacing, double logZMargin, int cores, int optimizer);
+RcppExport SEXP _sts_sts_estep_cpp(SEXP documentsSEXP, SEXP alpha_initSEXP, SEXP kappa_tSEXP, SEXP kappa_sSEXP, SEXP mvSEXP, SEXP muSEXP, SEXP Sigma_InvSEXP, SEXP logdet_sigmaSEXP, SEXP groupSEXP, SEXP numGroupsSEXP, SEXP maxitSEXP, SEXP logZModeSEXP, SEXP logZSpacingSEXP, SEXP logZMarginSEXP, SEXP coresSEXP, SEXP optimizerSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type documents(documentsSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type alpha_init(alpha_initSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type kappa_t(kappa_tSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type kappa_s(kappa_sSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type mv(mvSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type Sigma_Inv(Sigma_InvSEXP);
+    Rcpp::traits::input_parameter< double >::type logdet_sigma(logdet_sigmaSEXP);
+    Rcpp::traits::input_parameter< const arma::uvec& >::type group(groupSEXP);
+    Rcpp::traits::input_parameter< int >::type numGroups(numGroupsSEXP);
+    Rcpp::traits::input_parameter< int >::type maxit(maxitSEXP);
+    Rcpp::traits::input_parameter< int >::type logZMode(logZModeSEXP);
+    Rcpp::traits::input_parameter< double >::type logZSpacing(logZSpacingSEXP);
+    Rcpp::traits::input_parameter< double >::type logZMargin(logZMarginSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    Rcpp::traits::input_parameter< int >::type optimizer(optimizerSEXP);
+    rcpp_result_gen = Rcpp::wrap(sts_estep_cpp(documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma_Inv, logdet_sigma, group, numGroups, maxit, logZMode, logZSpacing, logZMargin, cores, optimizer));
+    return rcpp_result_gen;
+END_RCPP
+}
+// sts_optkappa_cpp
+Rcpp::List sts_optkappa_cpp(const Rcpp::List& phi_list, const arma::mat& abar, const arma::vec& mv, const arma::mat& kappa_t_old, const arma::mat& kappa_s_old, int nlambda, double lambda_min_ratio, double devmax, double tol, int cores, double damping, int select, Rcpp::Nullable<Rcpp::NumericVector> lambda_fixed);
+RcppExport SEXP _sts_sts_optkappa_cpp(SEXP phi_listSEXP, SEXP abarSEXP, SEXP mvSEXP, SEXP kappa_t_oldSEXP, SEXP kappa_s_oldSEXP, SEXP nlambdaSEXP, SEXP lambda_min_ratioSEXP, SEXP devmaxSEXP, SEXP tolSEXP, SEXP coresSEXP, SEXP dampingSEXP, SEXP selectSEXP, SEXP lambda_fixedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type phi_list(phi_listSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type abar(abarSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type mv(mvSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type kappa_t_old(kappa_t_oldSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type kappa_s_old(kappa_s_oldSEXP);
+    Rcpp::traits::input_parameter< int >::type nlambda(nlambdaSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_min_ratio(lambda_min_ratioSEXP);
+    Rcpp::traits::input_parameter< double >::type devmax(devmaxSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    Rcpp::traits::input_parameter< double >::type damping(dampingSEXP);
+    Rcpp::traits::input_parameter< int >::type select(selectSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type lambda_fixed(lambda_fixedSEXP);
+    rcpp_result_gen = Rcpp::wrap(sts_optkappa_cpp(phi_list, abar, mv, kappa_t_old, kappa_s_old, nlambda, lambda_min_ratio, devmax, tol, cores, damping, select, lambda_fixed));
+    return rcpp_result_gen;
+END_RCPP
+}
+// sts_poislasso_path_cpp
+Rcpp::List sts_poislasso_path_cpp(const arma::vec& y, const arma::vec& offset, const arma::mat& abar, int nlambda, double lambda_min_ratio, double devmax, double tol);
+RcppExport SEXP _sts_sts_poislasso_path_cpp(SEXP ySEXP, SEXP offsetSEXP, SEXP abarSEXP, SEXP nlambdaSEXP, SEXP lambda_min_ratioSEXP, SEXP devmaxSEXP, SEXP tolSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::vec& >::type y(ySEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type offset(offsetSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type abar(abarSEXP);
+    Rcpp::traits::input_parameter< int >::type nlambda(nlambdaSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_min_ratio(lambda_min_ratioSEXP);
+    Rcpp::traits::input_parameter< double >::type devmax(devmaxSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    rcpp_result_gen = Rcpp::wrap(sts_poislasso_path_cpp(y, offset, abar, nlambda, lambda_min_ratio, devmax, tol));
+    return rcpp_result_gen;
+END_RCPP
+}
+// sts_fastanchor_cpp
+Rcpp::IntegerVector sts_fastanchor_cpp(const arma::mat& Qbar_in, int K, int cores);
+RcppExport SEXP _sts_sts_fastanchor_cpp(SEXP Qbar_inSEXP, SEXP KSEXP, SEXP coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type Qbar_in(Qbar_inSEXP);
+    Rcpp::traits::input_parameter< int >::type K(KSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(sts_fastanchor_cpp(Qbar_in, K, cores));
+    return rcpp_result_gen;
+END_RCPP
+}
+// sts_expgrad_rows_cpp
+Rcpp::List sts_expgrad_rows_cpp(const arma::mat& ytX, const arma::mat& XtX, const Rcpp::IntegerVector& anchor, double tol, int max_its, int cores);
+RcppExport SEXP _sts_sts_expgrad_rows_cpp(SEXP ytXSEXP, SEXP XtXSEXP, SEXP anchorSEXP, SEXP tolSEXP, SEXP max_itsSEXP, SEXP coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type ytX(ytXSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type XtX(XtXSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type anchor(anchorSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    Rcpp::traits::input_parameter< int >::type max_its(max_itsSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(sts_expgrad_rows_cpp(ytX, XtX, anchor, tol, max_its, cores));
+    return rcpp_result_gen;
+END_RCPP
+}
 // stm_lhoodcpp
 double stm_lhoodcpp(SEXP eta, SEXP beta, SEXP doc_ct, SEXP mu, SEXP siginv);
 RcppExport SEXP _sts_stm_lhoodcpp(SEXP etaSEXP, SEXP betaSEXP, SEXP doc_ctSEXP, SEXP muSEXP, SEXP siginvSEXP) {
@@ -112,6 +225,12 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_sts_sts_logZ_probe", (DL_FUNC) &_sts_sts_logZ_probe, 8},
+    {"_sts_sts_estep_cpp", (DL_FUNC) &_sts_sts_estep_cpp, 16},
+    {"_sts_sts_optkappa_cpp", (DL_FUNC) &_sts_sts_optkappa_cpp, 13},
+    {"_sts_sts_poislasso_path_cpp", (DL_FUNC) &_sts_sts_poislasso_path_cpp, 7},
+    {"_sts_sts_fastanchor_cpp", (DL_FUNC) &_sts_sts_fastanchor_cpp, 3},
+    {"_sts_sts_expgrad_rows_cpp", (DL_FUNC) &_sts_sts_expgrad_rows_cpp, 6},
     {"_sts_stm_lhoodcpp", (DL_FUNC) &_sts_stm_lhoodcpp, 5},
     {"_sts_stm_gradcpp", (DL_FUNC) &_sts_stm_gradcpp, 5},
     {"_sts_stm_hpbcpp", (DL_FUNC) &_sts_stm_hpbcpp, 6},

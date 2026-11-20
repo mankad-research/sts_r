@@ -4,7 +4,7 @@
 \alias{estimateRegns}
 \title{Regression Table Estimation}
 \usage{
-estimateRegns(object, prevalence_sentiment, corpus)
+estimateRegns(object, prevalence_sentiment, corpus, nsims = 25, nsims_se = 250)
 }
 \arguments{
 \item{object}{an sts object}
@@ -20,11 +20,21 @@ as an integer matrix with two rows, and columns equal to the number of unique
 vocabulary words in the document.  The first row contains the 1-indexed
 vocabulary entry and the second row contains the number of times that term
 appears. This is the format produced by \code{\link{prepDocuments}}.}
+
+\item{nsims}{Number of draws of the document-level variables (the
+"method of composition"); default 25, as in earlier versions.}
+
+\item{nsims_se}{Number of draws from each regression's sampling distribution
+per document-level draw; default 250.}
 }
 \value{
-a list of tables with regression coefficient estimates. The first
-num-topic elements pertain to prevalence; the latter  num-topic elements
-pertain to sentiment-discourse.
+An object of class \code{"STSRegns"}: a list of \eqn{2K}
+coefficient tables (columns Estimate, Std. Error, t value, Pr(>|t|)), named
+\code{"Topic k prevalence"} and \code{"Topic k sentiment"}. The first \eqn{K}
+are for prevalence (the expected topic proportions) and the last \eqn{K} for
+sentiment-discourse. It has \code{print}, \code{coef}, \code{vcov},
+\code{confint} and \code{as.data.frame} methods, and can be indexed like
+the plain list returned by sts 1.6 and earlier.
 }
 \description{
 Estimates regression tables for prevalence and sentiment/discourse.
@@ -32,6 +42,16 @@ Estimates regression tables for prevalence and sentiment/discourse.
 \details{
 Estimate Gamma coefficients (along with standard errors, p-values, etc.) to
 assess how document-level meta-data determine prevalence and sentiment/discourse
+
+The regressions account for uncertainty in the latent document-level
+variables by the method of composition: \code{nsims} times, the prevalence
+and sentiment-discourse values of every document are drawn from a normal
+distribution centred at their estimates with covariance \code{object$sigma},
+each outcome is regressed on the covariates, and \code{nsims_se} draws are
+taken from each fitted regression's sampling distribution. Estimates and
+standard errors are the mean and standard deviation of the pooled draws.
+Results depend on the random number generator; call \code{set.seed()} first
+for reproducible tables.
 }
 \examples{
 \donttest{
@@ -45,4 +65,7 @@ sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 2)
 regns <- estimateRegns(sts_estimate, ~treatment*pid_rep, out)
 printRegnTables(x = regns)
 }
+}
+\seealso{
+\code{\link{printRegnTables}}, \code{\link{coef.STSRegns}}
 }

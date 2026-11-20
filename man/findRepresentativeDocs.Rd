@@ -2,7 +2,7 @@
 % Please edit documentation in R/findRepresentativeDocs.R
 \name{findRepresentativeDocs}
 \alias{findRepresentativeDocs}
-\title{Function for Identifying Documents that Load Heavily on a Topic}
+\title{Find Documents that Load Heavily on a Topic}
 \usage{
 findRepresentativeDocs(object, corpus_text, topic, n = 3)
 }

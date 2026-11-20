@@ -2,7 +2,7 @@
 % Please edit documentation in R/esthcpp.R
 \name{esthcpp}
 \alias{esthcpp}
-\title{Estimate Hessian Matrix}
+\title{Hessian of the Document-Level Objective}
 \usage{
 esthcpp(alpha_d, kappa_t, kappa_s, Sigma_Inv, doc, V, mv)
 }

@@ -1,4 +1,4 @@
-#' Function for Identifying Documents that Load Heavily on a Topic
+#' Find Documents that Load Heavily on a Topic
 #' 
 #' Extracts documents with the highest prevalence for a given topic
 #' 
@@ -21,12 +21,17 @@
 #' }
 #' @export
 findRepresentativeDocs = function(object, corpus_text, topic, n = 3) {
-  K <- (1 + ncol(object$alpha))/2
-  
-  expeta <- exp(cbind(object$alpha[,1:(K-1), drop = FALSE],0))
-  theta <- expeta/rowSums(expeta)
-  
-  ind <- order(theta[,topic], decreasing = TRUE)[1:n]
+  .check_sts(object)
+  K <- .sts_K(object)
+  if (length(topic) != 1 || !(topic %in% seq_len(K)))
+    stop(sprintf("'topic' must be a single topic number between 1 and %d.", K), call. = FALSE)
+  if (length(corpus_text) != nrow(object$alpha))
+    stop(sprintf("'corpus_text' has %d elements but the model has %d documents.",
+                 length(corpus_text), nrow(object$alpha)), call. = FALSE)
+  theta <- .sts_theta(object)
+  n <- min(n, nrow(theta))
+
+  ind <- order(theta[,topic], decreasing = TRUE)[seq_len(n)]
   
   # Calculate quartiles
   quartiles <- quantile(object$alpha[,K + topic - 1], probs = c(0.25, 0.5, 0.75))

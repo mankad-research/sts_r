@@ -1,4 +1,4 @@
-#' Estimate approximate ELBO 
+#' Approximate ELBO for One Document 
 #' 
 #' Estimates the approximate ELBO needed for the Variational E-step in C++
 #' 

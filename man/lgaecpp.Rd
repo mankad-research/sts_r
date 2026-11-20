@@ -2,7 +2,7 @@
 % Please edit documentation in R/lgaecpp.R
 \name{lgaecpp}
 \alias{lgaecpp}
-\title{Estimate Gradient}
+\title{Gradient of the Document-Level Objective}
 \usage{
 lgaecpp(alpha_d, Sigma_Inv, kappa_t, kappa_s, mu_d, doc, V, mv)
 }

@@ -452,7 +452,7 @@ Rcpp::List sts_optkappa_cpp(const Rcpp::List& phi_list,
                             double devmax,
                             double tol,
                             int cores = 1,
-                            double damping = 0.5,
+                            double damping = 0.0,
                             int select = 0,
                             Rcpp::Nullable<Rcpp::NumericVector> lambda_fixed = R_NilValue) {
   const int G = phi_list.size();

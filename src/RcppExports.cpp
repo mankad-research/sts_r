@@ -11,25 +11,6 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
-// sts_optkappa_adjusted_cpp
-Rcpp::List sts_optkappa_adjusted_cpp(const Rcpp::List& phi_list, const arma::mat& alphaS, const arma::mat& phiD, const Rcpp::IntegerVector& group, const arma::vec& mv, double ridge, double tol, int maxInner, int cores);
-RcppExport SEXP _sts_sts_optkappa_adjusted_cpp(SEXP phi_listSEXP, SEXP alphaSSEXP, SEXP phiDSEXP, SEXP groupSEXP, SEXP mvSEXP, SEXP ridgeSEXP, SEXP tolSEXP, SEXP maxInnerSEXP, SEXP coresSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< const Rcpp::List& >::type phi_list(phi_listSEXP);
-    Rcpp::traits::input_parameter< const arma::mat& >::type alphaS(alphaSSEXP);
-    Rcpp::traits::input_parameter< const arma::mat& >::type phiD(phiDSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type group(groupSEXP);
-    Rcpp::traits::input_parameter< const arma::vec& >::type mv(mvSEXP);
-    Rcpp::traits::input_parameter< double >::type ridge(ridgeSEXP);
-    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
-    Rcpp::traits::input_parameter< int >::type maxInner(maxInnerSEXP);
-    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
-    rcpp_result_gen = Rcpp::wrap(sts_optkappa_adjusted_cpp(phi_list, alphaS, phiD, group, mv, ridge, tol, maxInner, cores));
-    return rcpp_result_gen;
-END_RCPP
-}
 // sts_logZ_probe
 Rcpp::List sts_logZ_probe(const arma::mat& kappa_t, const arma::mat& kappa_s, const arma::vec& mv, const arma::vec& avals, int mode, double a_lo, double a_hi, double spacing);
 RcppExport SEXP _sts_sts_logZ_probe(SEXP kappa_tSEXP, SEXP kappa_sSEXP, SEXP mvSEXP, SEXP avalsSEXP, SEXP modeSEXP, SEXP a_loSEXP, SEXP a_hiSEXP, SEXP spacingSEXP) {
@@ -244,7 +225,6 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_sts_sts_optkappa_adjusted_cpp", (DL_FUNC) &_sts_sts_optkappa_adjusted_cpp, 9},
     {"_sts_sts_logZ_probe", (DL_FUNC) &_sts_sts_logZ_probe, 8},
     {"_sts_sts_estep_cpp", (DL_FUNC) &_sts_sts_estep_cpp, 16},
     {"_sts_sts_optkappa_cpp", (DL_FUNC) &_sts_sts_optkappa_cpp, 13},

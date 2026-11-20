@@ -44,22 +44,16 @@
 #' document-weighted least-squares fit of the STM content effects on the centered 
 #' levels of \code{initializationVar}, which reproduces the STM topic-word 
 #' distributions exactly when \code{initializationVar} has two levels.
-#' @param kappaEstimation A character input specifying how kappa should be estimated. \code{"lasso"} (default) allows for 
-#' penalties on the L1 norm.  We estimate a regularization path and then select the optimal
-#' shrinkage parameter using AIC. \code{"adjusted"} is the estimator described in
-#' Chen and Mankad (2025, Section 4.2): an unpenalized Poisson regression on the
-#' samples aggregated within the levels of \code{initializationVar}, in which each
-#' group's sentiment-discourse value is the Proposition 2 weighted average
-#' (equation 13), recomputed from the updated coefficients, starting from zero,
-#' until it converges. A ridge term of 1e-6 is added only so that the estimate
-#' exists when a word is absent from a group; where the iteration has no fixed
-#' point the first pass (weights at zero) is used. With \code{kappaSolver =
-#' "glmnet"}, \code{"adjusted"} is the sts 1.6 variant instead (lasso with AIC
-#' selection, at most ten adjustment passes, and the half-step damping that
-#' \code{"lasso"} also applies).
-#' All options use an approximation framework developed in Taddy (2013) called
-#' Distributed Multinomial Regression which utilizes a factorized poisson
-#' approximation to the multinomial.  See Chen and Mankad (2025) on the implementation here.
+#' @param kappaEstimation How kappa is estimated. The only option is
+#' \code{"lasso"} (default): for each word, a Poisson regression on the
+#' expected word-topic counts aggregated within the levels of
+#' \code{initializationVar}, with an L1 penalty whose strength is chosen by AIC
+#' along a regularization path. This uses the factorized Poisson approximation
+#' to the multinomial of Taddy (2013), Distributed Multinomial Regression; see
+#' Chen and Mankad (2025) on the implementation here. The new coefficients
+#' replace the old ones at each M-step (sts 1.1 to 1.6 averaged them with the
+#' previous values). The \code{"adjusted"} option was removed in sts 1.7; it
+#' now gives a warning and uses \code{"lasso"}.
 #' @param verbose A logical flag indicating whether information should be
 #' printed to the screen.  
 #' @param parallelize Deprecated; use \code{cores}. \code{TRUE} is treated
@@ -97,15 +91,17 @@
 #' returns that iterate, stopping once the bound has decreased for
 #' \code{patience} consecutive iterations or has stopped changing by more than
 #' \code{convTol}. This can only improve on the bound the old rule returned from
-#' the same stopping point. \code{TRUE} restores the 1.6 behaviour exactly --
-#' stop at the first decrease and return the last iterate -- for reproducing
-#' results from sts 1.6 or earlier.
+#' the same stopping point. \code{TRUE} restores the 1.6 stopping rule -- stop
+#' at the first decrease and return the last iterate. (Results from sts 1.6
+#' are not reproduced exactly in any case: 1.7 also changed the kappa update;
+#' see \code{kappaEstimation}.)
 #' @param patience Number of consecutive iterations with a decreasing ELBO
 #' tolerated before stopping, when \code{allow.neg.change = FALSE}; default 1.
 #' Note that the bound is not guaranteed to increase monotonically for this
-#' model: on the Gadarian data it rises to a single interior maximum and then
-#' declines for as long as the fit is allowed to run, so large values of
-#' \code{patience} cost time without improving the returned fit.
+#' model, because the AIC step re-selects the lasso penalty at every iteration:
+#' on the Gadarian data some fits rise monotonically to convergence while others
+#' reach an interior maximum and then decline, so large values of
+#' \code{patience} mostly cost time without improving the returned fit.
 #' @param kappaSolver Solver for the kappa M-step. \code{"cpp"} (default) uses
 #' a dedicated Poisson-lasso solver that exploits the separable structure of the
 #' aggregated design (one two-coefficient problem per topic, sharing the lambda
@@ -115,8 +111,7 @@
 #' glmnet's default, so on a small fraction of words it selects a different
 #' penalty than glmnet did in sts 1.6; in those cases glmnet agrees with it once
 #' its convergence threshold is tightened. \code{"glmnet"} uses glmnet as in sts
-#' 1.6. For \code{kappaEstimation = "adjusted"}, \code{"cpp"} is the published
-#' estimator (see \code{kappaEstimation}) and \code{"glmnet"} the sts 1.6 one.
+#' 1.6.
 #' @param cores Number of threads for the E-step (parallel over documents), the
 #' kappa M-step (parallel over words) and the spectral initialization; default
 #' \code{getOption("sts.cores", 1L)}. Results are identical for any number of
@@ -218,6 +213,12 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
 
   conv_criteria <- convTol
   topicreportevery <- 10
+  if (identical(kappaEstimation, "adjusted")) {
+    warning('kappaEstimation = "adjusted" was removed in sts 1.7; using "lasso".', call. = FALSE)
+    kappaEstimation <- "lasso"
+  }
+  if (!identical(kappaEstimation, "lasso"))
+    stop('kappaEstimation must be "lasso".', call. = FALSE)
   estimation = kappaEstimation
   nc_X <- ncol(X)
   D <- length(corpus$documents)
@@ -289,7 +290,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
 
   ## estimate kappa 
   if (initialization == "anchor") {
-    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, c_d_bar = c_d_bar, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, phiD =phiD, solver = kappaSolver, cores = cores)
+    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, solver = kappaSolver, cores = cores)
     kappa.est$kappa_t[which(kappa.est$kappa_t == 0)] <- sign(rnorm(sum(kappa.est$kappa_t == 0)))*1e-4
     kappa.est$kappa_s[which(kappa.est$kappa_s == 0)] <- sign(rnorm(sum(kappa.est$kappa_s == 0)))*1e-4
   } else {
@@ -419,7 +420,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
 
     freezeAfter <- getOption("sts.kappaFreezeAfter", NULL)
     lamFix <- if (!is.null(freezeAfter) && iter > freezeAfter) kappaLambda else NULL
-    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, c_d_bar = c_d_bar, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, phiD =phiD, solver = kappaSolver, cores = cores, lambda_fixed = lamFix)
+    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, solver = kappaSolver, cores = cores, lambda_fixed = lamFix)
     if (is.null(lamFix)) kappaLambda <- attr(kappa.est, "lambda")
 
     if (traceB) trace_kap[iter, ] <- boundAt(kappa.est)
@@ -460,7 +461,9 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
       ## then declines monotonically for as long as it is allowed to run: K=3
       ## with kappaEstimation = "lasso" peaks at iteration 25 and then falls
       ## for 35 consecutive iterations (-227 by iteration 60), and K=3 with
-      ## "adjusted" peaks at iteration 8 and falls for 52 (-1554). So the
+      ## the since-removed "adjusted" estimator peaked at iteration 8 and
+      ## fell for 52 (-1554). (Both figures are with the half-step damping
+      ## that 1.7 removed.) So the
       ## algorithm does not merely dip; past the peak it diverges, and 1.6's
       ## rule was accidentally stopping one iteration past the best point.
       ##

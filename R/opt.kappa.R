@@ -56,6 +56,27 @@ opt.kappa <- function(phi, alphaS, kappa, c_d_bar, estimation = estimation, numG
   ## (about 2% of words on poliblog2k) glmnet refit at thresh = 1e-12 agrees
   ## with it, so the differences are glmnet's convergence error, not the
   ## solver's. solver = "glmnet" keeps the 1.6 code path below.
+  ## kappaEstimation = "adjusted": Chen and Mankad (2025), Section 4.2 and
+  ## Proposition 2, as published -- Poisson regression on the aggregated
+  ## samples, with each group's sentiment-discourse value set by equation (13)
+  ## and recomputed from the new kappa_s until it converges, starting from
+  ## kappa_s = 0; no lasso, no AIC selection, no damping. A ridge of 1e-6 is
+  ## the only addition, so that the estimate exists when a word is absent from
+  ## a group (see src/adjusted.cpp). solver = "glmnet" keeps the 1.6 variant
+  ## (lasso + AIC, at most 10 adjustment passes, half-step damping).
+  if (estimation == "adjusted" && identical(solver, "cpp")) {
+    res <- sts_optkappa_adjusted_cpp(phi_list = phi, alphaS = alphaS, phiD = phiD,
+                                     group = as.integer(group), mv = mv,
+                                     ridge    = getOption("sts.adjustedRidge", 1e-6),
+                                     tol      = getOption("sts.adjustedTol", 1e-8),
+                                     maxInner = as.integer(getOption("sts.adjustedMaxInner", 100L)),
+                                     cores = cores)
+    damp <- getOption("sts.adjustedDamping", 0)   # internal diagnostic; the paper has none
+    kappa$kappa_t <- (1 - damp) * res$kappa_t + damp * kappa$kappa_t
+    kappa$kappa_s <- (1 - damp) * res$kappa_s + damp * kappa$kappa_s
+    attr(kappa, "adjustedInner") <- res$inner      # Proposition 2 passes per (v, k); -1 = not converged
+    return(kappa)
+  }
   if (estimation == "lasso" && identical(solver, "cpp")) {
     abar <- do.call(rbind, lapply(split(alphaS, group),
                                   function(x) colMeans(matrix(x, ncol = K))))

@@ -46,7 +46,17 @@
 #' distributions exactly when \code{initializationVar} has two levels.
 #' @param kappaEstimation A character input specifying how kappa should be estimated. \code{"lasso"} (default) allows for 
 #' penalties on the L1 norm.  We estimate a regularization path and then select the optimal
-#' shrinkage parameter using AIC. \code{"adjusted"} utilizes the lasso penalty with an adjusted aggregated Poisson regression. 
+#' shrinkage parameter using AIC. \code{"adjusted"} is the estimator described in
+#' Chen and Mankad (2025, Section 4.2): an unpenalized Poisson regression on the
+#' samples aggregated within the levels of \code{initializationVar}, in which each
+#' group's sentiment-discourse value is the Proposition 2 weighted average
+#' (equation 13), recomputed from the updated coefficients, starting from zero,
+#' until it converges. A ridge term of 1e-6 is added only so that the estimate
+#' exists when a word is absent from a group; where the iteration has no fixed
+#' point the first pass (weights at zero) is used. With \code{kappaSolver =
+#' "glmnet"}, \code{"adjusted"} is the sts 1.6 variant instead (lasso with AIC
+#' selection, at most ten adjustment passes, and the half-step damping that
+#' \code{"lasso"} also applies).
 #' All options use an approximation framework developed in Taddy (2013) called
 #' Distributed Multinomial Regression which utilizes a factorized poisson
 #' approximation to the multinomial.  See Chen and Mankad (2025) on the implementation here.
@@ -105,8 +115,8 @@
 #' glmnet's default, so on a small fraction of words it selects a different
 #' penalty than glmnet did in sts 1.6; in those cases glmnet agrees with it once
 #' its convergence threshold is tightened. \code{"glmnet"} uses glmnet as in sts
-#' 1.6. Applies to \code{kappaEstimation = "lasso"}; \code{"adjusted"} always
-#' uses glmnet.
+#' 1.6. For \code{kappaEstimation = "adjusted"}, \code{"cpp"} is the published
+#' estimator (see \code{kappaEstimation}) and \code{"glmnet"} the sts 1.6 one.
 #' @param cores Number of threads for the E-step (parallel over documents), the
 #' kappa M-step (parallel over words) and the spectral initialization; default
 #' \code{getOption("sts.cores", 1L)}. Results are identical for any number of

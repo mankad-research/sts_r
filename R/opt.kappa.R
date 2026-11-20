@@ -8,6 +8,18 @@
 # regression tests against 1.6).
 
 
+# glmnet() with maxit and thresh passed the way the installed glmnet expects.
+# glmnet >= 5.0 takes them in `control`; passing them as top-level arguments
+# is deprecated there and warns (once per session), which the retry loops in
+# .fit_glmnet_lasso() and mnreg() would take for a failed fit. The fits are
+# the same either way.
+.glmnet_fit <- function(..., maxit, thresh) {
+  if ("control" %in% names(formals(glmnet::glmnet)))
+    glmnet::glmnet(..., control = list(maxit = maxit, thresh = thresh))
+  else
+    glmnet::glmnet(..., maxit = maxit, thresh = thresh)
+}
+
 # Internal helper: fit a Poisson-lasso via glmnet with automatic nlambda retry and AIC
 # selection.  Returns the selected coefficient vector (length 2*K).
 .fit_glmnet_lasso <- function(x, y, offset_agg, penalty.factor, low, upp) {
@@ -16,7 +28,7 @@
   nlambda <- 250
   while (is.null(mod)) {
     mod <- tryCatch(
-      glmnet::glmnet(x = x, y = y, family = "poisson",
+      .glmnet_fit(x = x, y = y, family = "poisson",
                      offset = offset_agg, standardize = FALSE,
                      intercept = FALSE, lambda.min.ratio = 0.001,
                      nlambda = nlambda, alpha = 1,
@@ -31,7 +43,7 @@
     # after 10 failed attempts, accept estimates as-is
     if (inner_count == 10) {
       mod <- suppressWarnings(
-        glmnet::glmnet(x = x, y = y, family = "poisson",
+        .glmnet_fit(x = x, y = y, family = "poisson",
                        offset = offset_agg, standardize = FALSE,
                        intercept = FALSE, lambda.min.ratio = 0.001,
                        nlambda = nlambda, alpha = 1,

@@ -348,7 +348,7 @@ stmMnreg <- function(beta.ss, K, A, wcounts, interactions = TRUE,
     offset2 <- m[i] + offset
     mod <- NULL
     while (is.null(mod)) {
-      mod <- tryCatch(glmnet::glmnet(x = covar, y = counts[[i]], family = "poisson",
+      mod <- tryCatch(.glmnet_fit(x = covar, y = counts[[i]], family = "poisson",
                                      offset = offset2, standardize = FALSE,
                                      intercept = FALSE,
                                      lambda.min.ratio = lambda.min.ratio,

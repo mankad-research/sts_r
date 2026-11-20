@@ -30,7 +30,7 @@ glmnet_word <- function(s, v, thresh = 1e-12) {
   off <- log(unlist(lapply(s$phi, colSums))) + s$mv[v]
   x1 <- matrix(rep(diag(K), G), ncol = K, byrow = TRUE)
   xa <- do.call(rbind, lapply(seq_len(G), function(g) diag(s$abar[g, ], K)))
-  m <- glmnet::glmnet(cbind(x1, xa), y, family = "poisson", offset = off,
+  m <- sts:::.glmnet_fit(cbind(x1, xa), y, family = "poisson", offset = off,
                       standardize = FALSE, intercept = FALSE, lambda.min.ratio = 0.001,
                       nlambda = 250, alpha = 1, maxit = 1e6, thresh = thresh)
   ic <- (1 - m$dev.ratio) * m$nulldev + 2 * m$df

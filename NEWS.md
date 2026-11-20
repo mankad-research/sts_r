@@ -96,6 +96,10 @@ To reproduce an sts 1.6 fit (up to floating-point reassociation), use
   for large K.
 * Functions that take a fitted model check that they were given one, and
   check their other inputs, with informative errors.
+* Compatible with glmnet 5.x, which takes `maxit` and `thresh` in `control`.
+  Passing them as top-level arguments now gives a deprecation warning, which
+  the `kappaSolver = "glmnet"` path and the STM initialization took for a
+  failed fit, refitting the first word of a session with a longer lambda path.
 
 ## Package
 

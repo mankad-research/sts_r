@@ -4,3 +4,4 @@
 ^Meta$
 ^vignettes/Makefile$
 ^vignettes/usingSTS\.pdf$
+^\.github$

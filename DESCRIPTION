@@ -30,7 +30,8 @@ BugReports: https://github.com/mankad-research/sts_r/issues
 Depends: R (>= 3.5.0)
 Imports:
     Rcpp, RcppParallel (>= 5.0.1), glmnet, matrixStats, slam, parallel, Matrix, mvtnorm, ggplot2, tm, SnowballC, graphics, stats
-Suggests: R.rsp
+Suggests: R.rsp, testthat (>= 3.1.5)
+Config/testthat/edition: 3
 LinkingTo: Rcpp, RcppArmadillo, RcppParallel
 SystemRequirements: GNU make
 VignetteBuilder: R.rsp

@@ -28,6 +28,10 @@ jobs:
       # Keep the parallel E-step within CRAN's two-core limit during checks.
       RCPP_PARALLEL_NUM_THREADS: 2
       OMP_NUM_THREADS: 2
+      # Run the developer tests too (the glmnet comparisons); the sts 1.6
+      # regression test also needs STS_REGRESSION_TESTS=true and the fixtures'
+      # platform, so it is left to local runs.
+      NOT_CRAN: true
 
     steps:
       - uses: actions/checkout@v4

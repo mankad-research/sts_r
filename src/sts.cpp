@@ -142,13 +142,17 @@ arma::mat esthcpp(const arma::vec& alpha_d,
     arma::uvec cdv_ind = arma::conv_to<arma::uvec>::from(doc.row(0) - 1);
     arma::vec cdv = doc.row(1).t();
 
-    arma::vec etaexp = arma::exp(arma::join_cols(alpha_d.subvec(0, K - 2), arma::zeros<arma::vec>(1)));
+    // max-shifted (sts 1.7): theta and beta are unchanged, but neither
+    // exp() can overflow for large prevalence values or coefficients
+    arma::vec eta = arma::join_cols(alpha_d.subvec(0, K - 2), arma::zeros<arma::vec>(1));
+    arma::vec etaexp = arma::exp(eta - eta.max());
         
     arma::mat beta(V, K, arma::fill::zeros);
     arma::mat beta_bar(V, K, arma::fill::zeros);
     
     for (int k = 0; k < K; ++k) {
-        beta.col(k) = arma::exp(mv + kappa_t.col(k) + kappa_s.col(k) * alpha_d(K + k - 1));
+        arma::vec linpred = mv + kappa_t.col(k) + kappa_s.col(k) * alpha_d(K + k - 1);
+        beta.col(k) = arma::exp(linpred - linpred.max());
         beta.col(k) /= arma::accu(beta.col(k));  // In-place softmax
         beta_bar.col(k) = etaexp(k) * beta.col(k);
     }

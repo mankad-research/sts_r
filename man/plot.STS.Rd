@@ -2,7 +2,7 @@
 % Please edit documentation in R/plot.STS.R
 \name{plot.STS}
 \alias{plot.STS}
-\title{Function for plotting STS objects}
+\title{Plot the Most Likely Words of Each Topic}
 \usage{
 \method{plot}{STS}(
   x,

@@ -3,12 +3,14 @@
 \name{summary.STS}
 \alias{summary.STS}
 \alias{print.STS}
-\title{Summary Function for the STS objects}
+\title{Summarize a Fitted STS Model}
 \usage{
 \method{summary}{STS}(object, ...)
+
+\method{print}{STS}(x, ...)
 }
 \arguments{
-\item{object}{An STS object.}
+\item{object, x}{An STS object.}
 
 \item{\dots}{Additional arguments affecting the summary}
 }
@@ -16,6 +18,6 @@
 Function to report on the contents of STS objects
 }
 \details{
-Summary prints a short statement about the model and then runs
-\code{\link{printTopWords}}.
+\code{print} reports the size of the model and how the fit ended;
+\code{summary} also runs \code{\link{printTopWords}}.
 }

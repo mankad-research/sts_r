@@ -12,11 +12,22 @@ heldoutLikelihood(object, missing)
 \item{missing}{list of which words and documents are in the heldout set}
 }
 \value{
-expected.heldout is the average of the held-out log-likelihood values
-for each document.
+A list with \code{expected.heldout}, the average over documents of
+each document's mean held-out log-likelihood per token; \code{doc.heldout},
+those per-document values; \code{index}, the documents with held-out words;
+and \code{ntokens}, the number of held-out tokens in each.
 }
 \description{
 Compute the heldout log-likelihood of the STS model
+}
+\details{
+For a document with topic proportions \eqn{\theta_d} and
+sentiment-discourse values \eqn{\alpha^{(s)}_d}, each held-out token of word
+\eqn{v} contributes \eqn{\log \sum_k \theta_{d,k} \beta_{d,k,v}}, where
+\eqn{\beta_{d,k,\cdot}} is topic \eqn{k}'s word distribution at
+\eqn{\alpha^{(s)}_{d,k}}. Since sts 1.7 the computation is done on the log
+scale, so it cannot overflow for large coefficients (sts 1.6 returned
+\code{NaN} there), and is faster.
 }
 \examples{
 \donttest{

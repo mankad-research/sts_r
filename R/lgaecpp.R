@@ -1,4 +1,4 @@
-#' Estimate Gradient
+#' Gradient of the Document-Level Objective
 #' 
 #' Estimates the Gradient needed for the Variational E-step in C++
 #' 

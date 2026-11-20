@@ -161,19 +161,33 @@ The per-document objective can have more than one local maximum; the two
 optimizers reach the same one for over 99.5\% of documents in our tests.}
 }
 \value{
-An object of class sts
+An object of class \code{"STS"}, a list with components
 
 \item{alpha}{Estimated prevalence and sentiment-discourse values for each document and topic}
-\item{gamma}{Estimated regression coefficients that determine prevalence and sentiment/discourse for each topic}
+\item{gamma}{Estimated regression coefficients that determine prevalence and
+sentiment/discourse for each topic: one row per covariate (with an intercept),
+and columns for the prevalence of topics 1 to K-1 (relative to topic K) and the
+sentiment-discourse of topics 1 to K. These are the variational-EM point
+estimates, also returned by \code{\link{coef.STS}}; for standard errors that
+account for the uncertainty in the document-level variables, use
+\code{\link{estimateRegns}}.}
 \item{kappa}{Estimated kappa coefficients that determine sentiment-discourse and the topic-word distributions}
 \item{sigma_inv}{Inverse of the covariance matrix for the alpha parameters}
 \item{sigma}{Covariance matrix for the alpha parameters}
 \item{elbo}{the ELBO at each iteration of the estimation algorithm}
 \item{mv}{the baseline log-transformed occurrence rate of each word in the corpus}
-\item{runtime}{Time elapsed in seconds}
+\item{runtime}{Time elapsed in seconds, including initialization (sts 1.6
+and earlier excluded it)}
 \item{vocab}{Vocabulary vector used}
 \item{mu}{Mean (fitted) values for alpha based on document-level variables * estimated
 Gamma for each document}
+\item{diagnostics}{A data frame with one row per iteration: the bound
+(\code{elbo}), its data-fit and Laplace terms (\code{elboObj},
+\code{elboLap}), and the mean relative changes in alpha and kappa
+(\code{achange}, \code{kchange}). New in sts 1.7.}
+\item{bestIter}{The iteration whose estimates are returned (see
+\code{allow.neg.change}). New in sts 1.7.}
+\item{call}{The matched call. New in sts 1.7.}
 }
 \description{
 Estimation of the STS Model using variational EM.

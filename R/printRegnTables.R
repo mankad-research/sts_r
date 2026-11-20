@@ -28,7 +28,11 @@ printRegnTables <- function(x, topics = NULL, digits = max(3L, getOption("digits
                              signif.stars = getOption("show.signif.stars"), ...) {
 #  cat("\nCall:\n", paste(deparse(x$call), sep = "\n", collapse = "\n"), 
 #      "\n\n", sep = "")
+  if (!is.list(x) || length(x) %% 2 != 0 || !all(vapply(x, is.matrix, logical(1))))
+    stop("'x' must be the regression tables returned by estimateRegns().", call. = FALSE)
   K <- length(x)/2
+  if (!is.null(topics) && !all(topics %in% seq_len(K)))
+    stop(sprintf("'topics' must be between 1 and %d.", K), call. = FALSE)
   if (is.null(topics)) {
     prevSentIndex <- 1:length(x)
   } else {

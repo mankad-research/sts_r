@@ -33,6 +33,6 @@ test_that("1.7 reproduces sts 1.6 in the 1.6 configuration", {
     expect_equal(f$elbo, r$elbo, tolerance = 1e-8, label = paste(nm, "bound"))
     expect_equal(f$alpha, r$alpha, tolerance = 1e-6, label = paste(nm, "alpha"))
     expect_equal(f$kappa$kappa_s, r$kappa_s, tolerance = 1e-6, label = paste(nm, "kappa_s"))
-    expect_equal(f$gamma, r$gamma, tolerance = 1e-6, label = paste(nm, "gamma"))
+    expect_equal(unname(f$gamma), r$gamma, tolerance = 1e-6, label = paste(nm, "gamma"))
   }
 })

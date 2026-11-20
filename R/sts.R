@@ -128,19 +128,33 @@
 #' no faster with the interpolated log-partition, where evaluations are cheap.
 #' The per-document objective can have more than one local maximum; the two
 #' optimizers reach the same one for over 99.5% of documents in our tests.
-#' @return An object of class sts
+#' @return An object of class \code{"STS"}, a list with components
 #' 
 #' \item{alpha}{Estimated prevalence and sentiment-discourse values for each document and topic} 
-#' \item{gamma}{Estimated regression coefficients that determine prevalence and sentiment/discourse for each topic} 
+#' \item{gamma}{Estimated regression coefficients that determine prevalence and
+#' sentiment/discourse for each topic: one row per covariate (with an intercept),
+#' and columns for the prevalence of topics 1 to K-1 (relative to topic K) and the
+#' sentiment-discourse of topics 1 to K. These are the variational-EM point
+#' estimates, also returned by \code{\link{coef.STS}}; for standard errors that
+#' account for the uncertainty in the document-level variables, use
+#' \code{\link{estimateRegns}}.} 
 #' \item{kappa}{Estimated kappa coefficients that determine sentiment-discourse and the topic-word distributions} 
 #' \item{sigma_inv}{Inverse of the covariance matrix for the alpha parameters}
 #' \item{sigma}{Covariance matrix for the alpha parameters} 
 #' \item{elbo}{the ELBO at each iteration of the estimation algorithm}
 #' \item{mv}{the baseline log-transformed occurrence rate of each word in the corpus}
-#' \item{runtime}{Time elapsed in seconds} 
+#' \item{runtime}{Time elapsed in seconds, including initialization (sts 1.6
+#' and earlier excluded it)} 
 #' \item{vocab}{Vocabulary vector used} 
 #' \item{mu}{Mean (fitted) values for alpha based on document-level variables * estimated 
 #' Gamma for each document}
+#' \item{diagnostics}{A data frame with one row per iteration: the bound
+#' (\code{elbo}), its data-fit and Laplace terms (\code{elboObj},
+#' \code{elboLap}), and the mean relative changes in alpha and kappa
+#' (\code{achange}, \code{kchange}). New in sts 1.7.}
+#' \item{bestIter}{The iteration whose estimates are returned (see
+#' \code{allow.neg.change}). New in sts 1.7.}
+#' \item{call}{The matched call. New in sts 1.7.}
 #' 
 #' 
 #' @seealso  \code{\link{estimateRegns}}
@@ -168,6 +182,8 @@
 #' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 1, verbose = FALSE)
 #' @export
 sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2, allow.neg.change = FALSE, patience = 1L, kappaSolver = c("cpp", "glmnet"), cores = getOption("sts.cores", 1L), estepOptimizer = c("bfgs", "newton")) {
+  call <- match.call()
+  timer_full <- proc.time()[3]
 
   # if (!is.null(seed)) {set.seed(seed)}
   if (!(is.character(initialization) && length(initialization) == 1 &&
@@ -340,7 +356,6 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
   }
 
   if (verbose) {cat("Done.\nStarting Estimation...\n")}
-  timer_full <- proc.time()[3]
 
   while (iter <= maxIter & !converge) {
     t1 <- proc.time()[3]
@@ -534,6 +549,9 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     mu$mu         <- best_state$mu
   }
 
+  ## label the prevalence/sentiment regression coefficients (1.7)
+  dimnames(Gamma.est) <- list(c("(Intercept)", if (is.null(colnames(X))) paste0("X", seq_len(ncol(X))) else colnames(X)),
+                              c(sprintf("Topic %d prevalence", seq_len(K - 1)), sprintf("Topic %d sentiment", seq_len(K))))
   final.est <- list(alpha = alpha.est, gamma = Gamma.est, kappa = kappa.est, sigma_inv = Sigma_Inv.est, sigma = sigma, elbo = elbo_path, mv = mv, runtime = proc.time()[3] - timer_full, vocab = mod.out$vocab, mu = mu$mu)
   ## Per-iteration diagnostics (new in 1.7): the bound's two components and
   ## the mean relative change in alpha and kappa.
@@ -553,6 +571,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
       lapAfterMuSigma = trace_mu[1:(iter - 1), 3], lapAfterKappa = trace_kap[1:(iter - 1), 3])
   }
   final.est$bestIter <- if (allow.neg.change) length(elbo_path) else best_iter
+  final.est$call <- call
   class(final.est) <- "STS"
 
   return(final.est)

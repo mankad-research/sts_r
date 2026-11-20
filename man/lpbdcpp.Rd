@@ -2,7 +2,7 @@
 % Please edit documentation in R/lpbdcpp.R
 \name{lpbdcpp}
 \alias{lpbdcpp}
-\title{Estimate approximate ELBO}
+\title{Approximate ELBO for One Document}
 \usage{
 lpbdcpp(alpha_d, Sigma_Inv, kappa_t, kappa_s, mu_d, doc, V, mv)
 }

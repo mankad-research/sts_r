@@ -3,7 +3,7 @@
 \docType{data}
 \name{gadarian}
 \alias{gadarian}
-\title{Gadarian and Albertson data}
+\title{Gadarian and Albertson Data}
 \format{
 A data frame with 341 observations on the following 4 variables.
 \describe{

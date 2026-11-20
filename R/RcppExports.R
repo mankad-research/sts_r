@@ -5,8 +5,8 @@ sts_logZ_probe <- function(kappa_t, kappa_s, mv, avals, mode, a_lo, a_hi, spacin
     .Call(`_sts_sts_logZ_probe`, kappa_t, kappa_s, mv, avals, mode, a_lo, a_hi, spacing)
 }
 
-sts_estep_cpp <- function(documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma_Inv, logdet_sigma, group, numGroups, maxit, logZMode, logZSpacing, logZMargin, cores = 1L) {
-    .Call(`_sts_sts_estep_cpp`, documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma_Inv, logdet_sigma, group, numGroups, maxit, logZMode, logZSpacing, logZMargin, cores)
+sts_estep_cpp <- function(documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma_Inv, logdet_sigma, group, numGroups, maxit, logZMode, logZSpacing, logZMargin, cores = 1L, optimizer = 0L) {
+    .Call(`_sts_sts_estep_cpp`, documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma_Inv, logdet_sigma, group, numGroups, maxit, logZMode, logZSpacing, logZMargin, cores, optimizer)
 }
 
 sts_optkappa_cpp <- function(phi_list, abar, mv, kappa_t_old, kappa_s_old, nlambda, lambda_min_ratio, devmax, tol, cores = 1L, damping = 0.5, select = 0L, lambda_fixed = NULL) {

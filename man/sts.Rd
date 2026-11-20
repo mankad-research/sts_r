@@ -22,7 +22,8 @@ sts(
   allow.neg.change = FALSE,
   patience = 1L,
   kappaSolver = c("cpp", "glmnet"),
-  cores = getOption("sts.cores", 1L)
+  cores = getOption("sts.cores", 1L),
+  estepOptimizer = c("bfgs", "newton")
 )
 }
 \arguments{
@@ -123,6 +124,36 @@ Note that the bound is not guaranteed to increase monotonically for this
 model: on the Gadarian data it rises to a single interior maximum and then
 declines for as long as the fit is allowed to run, so large values of
 \code{patience} cost time without improving the returned fit.}
+
+\item{kappaSolver}{Solver for the kappa M-step. \code{"cpp"} (default) uses
+a dedicated Poisson-lasso solver that exploits the separable structure of the
+aggregated design (one two-coefficient problem per topic, sharing the lambda
+path and the AIC selection), with a closed-form solution when the
+initialization variable has two levels. It reproduces glmnet's lambda grid
+and path truncation and solves each problem to a tighter tolerance than
+glmnet's default, so on a small fraction of words it selects a different
+penalty than glmnet did in sts 1.6; in those cases glmnet agrees with it once
+its convergence threshold is tightened. \code{"glmnet"} uses glmnet as in sts
+1.6. Applies to \code{kappaEstimation = "lasso"}; \code{"adjusted"} always
+uses glmnet.}
+
+\item{cores}{Number of threads for the E-step (parallel over documents), the
+kappa M-step (parallel over words) and the spectral initialization; default
+\code{getOption("sts.cores", 1L)}. Results are identical for any number of
+threads: work is divided into blocks that depend only on the data, and
+partial sums are combined in a fixed order.}
+
+\item{estepOptimizer}{Optimizer for each document's variational problem in
+the E-step. \code{"bfgs"} (default) uses the BFGS algorithm of
+\code{stats::optim()}, as in sts 1.6 (ported to C++). \code{"newton"} uses
+Newton's method with the exact Hessian, a capped step, a diagonal shift where
+the Hessian is not positive definite and a backtracking line search; it needs
+about 7 objective evaluations per document instead of about 25 and converges
+to a tighter tolerance. That makes it about three times faster when
+\code{logZ = "exact"}, where each evaluation sums over the vocabulary, but
+no faster with the interpolated log-partition, where evaluations are cheap.
+The per-document objective can have more than one local maximum; the two
+optimizers reach the same one for over 99.5\% of documents in our tests.}
 }
 \value{
 An object of class sts

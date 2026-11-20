@@ -96,6 +96,33 @@
 #' model: on the Gadarian data it rises to a single interior maximum and then
 #' declines for as long as the fit is allowed to run, so large values of
 #' \code{patience} cost time without improving the returned fit.
+#' @param kappaSolver Solver for the kappa M-step. \code{"cpp"} (default) uses
+#' a dedicated Poisson-lasso solver that exploits the separable structure of the
+#' aggregated design (one two-coefficient problem per topic, sharing the lambda
+#' path and the AIC selection), with a closed-form solution when the
+#' initialization variable has two levels. It reproduces glmnet's lambda grid
+#' and path truncation and solves each problem to a tighter tolerance than
+#' glmnet's default, so on a small fraction of words it selects a different
+#' penalty than glmnet did in sts 1.6; in those cases glmnet agrees with it once
+#' its convergence threshold is tightened. \code{"glmnet"} uses glmnet as in sts
+#' 1.6. Applies to \code{kappaEstimation = "lasso"}; \code{"adjusted"} always
+#' uses glmnet.
+#' @param cores Number of threads for the E-step (parallel over documents), the
+#' kappa M-step (parallel over words) and the spectral initialization; default
+#' \code{getOption("sts.cores", 1L)}. Results are identical for any number of
+#' threads: work is divided into blocks that depend only on the data, and
+#' partial sums are combined in a fixed order.
+#' @param estepOptimizer Optimizer for each document's variational problem in
+#' the E-step. \code{"bfgs"} (default) uses the BFGS algorithm of
+#' \code{stats::optim()}, as in sts 1.6 (ported to C++). \code{"newton"} uses
+#' Newton's method with the exact Hessian, a capped step, a diagonal shift where
+#' the Hessian is not positive definite and a backtracking line search; it needs
+#' about 7 objective evaluations per document instead of about 25 and converges
+#' to a tighter tolerance. That makes it about three times faster when
+#' \code{logZ = "exact"}, where each evaluation sums over the vocabulary, but
+#' no faster with the interpolated log-partition, where evaluations are cheap.
+#' The per-document objective can have more than one local maximum; the two
+#' optimizers reach the same one for over 99.5% of documents in our tests.
 #' @return An object of class sts
 #' 
 #' \item{alpha}{Estimated prevalence and sentiment-discourse values for each document and topic} 
@@ -135,7 +162,7 @@
 #' ## low max iteration number just for testing
 #' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 1, verbose = FALSE)
 #' @export
-sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2, allow.neg.change = FALSE, patience = 1L, kappaSolver = c("cpp", "glmnet"), cores = getOption("sts.cores", 1L)) {
+sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2, allow.neg.change = FALSE, patience = 1L, kappaSolver = c("cpp", "glmnet"), cores = getOption("sts.cores", 1L), estepOptimizer = c("bfgs", "newton")) {
 
   # if (!is.null(seed)) {set.seed(seed)}
   if (!(is.character(initialization) && length(initialization) == 1 &&
@@ -154,6 +181,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     stop("patience must be a single integer >= 1.")
   patience <- as.integer(patience)
   kappaSolver <- match.arg(kappaSolver)
+  estepOptimizer <- match.arg(estepOptimizer)
   if (!(is.numeric(cores) && length(cores) == 1 && !is.na(cores) && cores >= 1))
     stop("cores must be a single integer >= 1.")
   cores <- as.integer(cores)
@@ -337,7 +365,8 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
       logZMode     = logZmode_num,
       logZSpacing  = logZSpacing,
       logZMargin   = logZMargin,
-      cores        = cores)
+      cores        = cores,
+      optimizer    = if (estepOptimizer == "newton") 1L else 0L)
 
     alpha.est <- estep$alpha
     sigma.ss  <- estep$sigma_ss

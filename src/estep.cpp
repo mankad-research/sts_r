@@ -33,6 +33,10 @@
 
 using namespace sts;
 
+#ifndef NEWTON_MAX_STEP
+#define NEWTON_MAX_STEP 1.0
+#endif
+
 // Direct access to the two normalizer backends, for the accuracy and
 // convergence-rate tests in tests/testthat and for the error analysis.
 // mode 0 = exact (one pass over V), mode 1 = quintic Hermite table.
@@ -170,6 +174,72 @@ public:
     return arma::symmatu(-H + Si_);
   }
 
+  // Newton's method on the per-document objective, using the exact Hessian
+  // (hessian() is the exact negative Hessian of the objective: verified
+  // against finite differences of the gradient to ~1e-9, at and away from the
+  // optimum). Converges quadratically, so it needs a handful of iterations
+  // where BFGS needs ~20-30 objective evaluations.
+  //  * The objective is not globally concave, so if the negative Hessian is not
+  //    positive definite a growing diagonal shift is added (Levenberg), which
+  //    keeps the step an ascent direction.
+  //  * Backtracking (Armijo) line search guarantees an increase.
+  //  * Converged when half the Newton decrement, g' H^-1 g / 2 -- the
+  //    predicted remaining gain -- is below tol * (1 + |f|), or the step is
+  //    negligible. tol is far tighter than BFGS's reltol; with quadratic
+  //    convergence that costs about one extra iteration.
+  // Returns false if it stalls, in which case the caller finishes with BFGS
+  // from the point reached.
+  bool newton(arma::vec& a, int maxit, double tol, int& iters, int& nfun) {
+    const arma::uword P = a.n_elem;
+    const arma::mat I = arma::eye(P, P);
+    iters = 0; nfun = 0;
+    prepare(a); ++nfun;
+    double f = obj_;
+    for (int it = 0; it < maxit; ++it) {
+      ++iters;
+      arma::vec gneg; gr(a, gneg);
+      const arma::vec g = -gneg;
+      const arma::mat H = hessian(a);
+      arma::mat R;
+      double tau = 0.0;
+      const double scale = std::max(1.0, arma::max(arma::abs(H.diag())));
+      while (!arma::chol(R, tau == 0.0 ? H : arma::mat(H + tau * I))) {
+        tau = (tau == 0.0) ? 1e-8 * scale : 10.0 * tau;
+        if (tau > 1e8 * scale) return false;
+      }
+      // d = (H + tau I)^{-1} g via the Cholesky factor
+      const arma::vec y = arma::solve(arma::trimatl(R.t()), g);
+      const arma::vec d = arma::solve(arma::trimatu(R), y);
+      const double dec = arma::dot(g, d);
+      if (!(dec >= 0.0) || !std::isfinite(dec)) return false;
+      // Convergence only counts when no shift was needed: with tau > 0 the
+      // step and the decrement are shrunk by the shift and can be tiny far
+      // from an optimum. A negligible shifted step means "stalled" instead.
+      const bool tiny = arma::max(arma::abs(d)) < 1e-12;
+      if (tau == 0.0 && (0.5 * dec <= tol * (1.0 + std::fabs(f)) || tiny)) {
+        prepare(a);                       // leave the cache at the returned point
+        return true;
+      }
+      if (tiny) { prepare(a); return false; }
+      // Cap the step (a simple trust region): some documents' objectives are
+      // multimodal, and an uncapped first Newton step from the warm start can
+      // land in a different, worse local maximum than BFGS's cautious first
+      // steps find (18 of 11,963 Austen passages). Capping keeps Newton in
+      // the starting basin; near the optimum the cap is inactive, so the
+      // quadratic convergence is unaffected.
+      double t = std::min(1.0, NEWTON_MAX_STEP / std::max(1e-300, arma::max(arma::abs(d))));
+      for (;;) {
+        arma::vec an = a + t * d;
+        prepare(an); ++nfun;
+        if (std::isfinite(obj_) && obj_ >= f + 1e-4 * t * dec) { a = an; f = obj_; break; }
+        t *= 0.5;
+        if (t < 1e-14) { prepare(a); return false; }
+      }
+    }
+    prepare(a);
+    return false;
+  }
+
   // beta_bar on the document's rows == 1.6's BZ[cdv_ind, ].
   const arma::mat& beta_bar() const { return bb_; }
   double objective() const { return obj_; }
@@ -250,7 +320,7 @@ namespace {
 struct BlockOut {
   arma::mat sigma_ss;
   double elbo = 0.0, elbo_obj = 0.0, elbo_lap = 0.0;
-  long fncount = 0, grcount = 0, nfail = 0, ncholfix = 0;
+  long fncount = 0, grcount = 0, nfail = 0, ncholfix = 0, nnewtonfallback = 0;
   std::string err;
 };
 
@@ -264,6 +334,7 @@ struct EstepWorker : public RcppParallel::Worker {
   const arma::mat& Sigma_Inv;
   const double logdet_sigma;
   const int maxit;
+  const int optimizer;            // 0 = BFGS (vmmin port, as 1.6), 1 = Newton
   const std::vector<arma::uword>& block_start;
   arma::mat& alpha;
   arma::mat& phiD;
@@ -274,11 +345,12 @@ struct EstepWorker : public RcppParallel::Worker {
   EstepWorker(const std::vector<arma::uvec>& ind_, const std::vector<arma::vec>& cnt_,
               const Normalizer& nrm_, const arma::mat& lin_base_, const arma::mat& kappa_s_,
               const arma::mat& mu_, const arma::mat& Sigma_Inv_, double logdet_sigma_,
-              int maxit_, const std::vector<arma::uword>& block_start_,
+              int maxit_, int optimizer_, const std::vector<arma::uword>& block_start_,
               arma::mat& alpha_, arma::mat& phiD_, arma::mat& lZ_opt_,
               std::vector<BlockOut>& out_, arma::uword P_)
     : ind(ind_), cnt(cnt_), nrm(nrm_), lin_base(lin_base_), kappa_s(kappa_s_),
       mu(mu_), Sigma_Inv(Sigma_Inv_), logdet_sigma(logdet_sigma_), maxit(maxit_),
+      optimizer(optimizer_),
       block_start(block_start_), alpha(alpha_), phiD(phiD_), lZ_opt(lZ_opt_),
       out(out_), P(P_) {}
 
@@ -295,9 +367,20 @@ struct EstepWorker : public RcppParallel::Worker {
           DocProblem prob(nrm, lb_doc, ks_doc, cnt[d], mu_d, Sigma_Inv);
 
           arma::vec a = alpha.row(d).t();
-          VmminResult vr = vmmin(a, prob, maxit);
+          if (optimizer == 1 && maxit > 0) {
+            int ni = 0, nf = 0;
+            const bool ok = prob.newton(a, 100, 1e-13, ni, nf);
+            bo.fncount += nf; bo.grcount += ni;
+            if (!ok) {                     // stalled: finish with BFGS from here
+              VmminResult vr = vmmin(a, prob, maxit);
+              bo.fncount += vr.fncount; bo.grcount += vr.grcount; bo.nfail += vr.fail;
+              bo.nnewtonfallback++;
+            }
+          } else {
+            VmminResult vr = vmmin(a, prob, maxit);
+            bo.fncount += vr.fncount; bo.grcount += vr.grcount; bo.nfail += vr.fail;
+          }
           alpha.row(d) = a.t();
-          bo.fncount += vr.fncount; bo.grcount += vr.grcount; bo.nfail += vr.fail;
 
           arma::mat H = prob.hessian(a);
           arma::mat R;
@@ -394,7 +477,8 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
                          int logZMode,
                          double logZSpacing,
                          double logZMargin,
-                         int cores = 1) {
+                         int cores = 1,
+                         int optimizer = 0) {
   const arma::uword D = documents.size();
   const arma::uword V = mv.n_elem;
   const arma::uword K = kappa_t.n_cols;
@@ -446,18 +530,18 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
   std::vector<BlockOut> out(nb);
 
   EstepWorker ew(ind, cnt, nrm, lin_base, kappa_s, mu, Sigma_Inv, logdet_sigma,
-                 maxit, block_start, alpha, phiD, lZ_opt, out, P);
+                 maxit, optimizer, block_start, alpha, phiD, lZ_opt, out, P);
   RcppParallel::parallelFor(0, nb, ew, 1, cores);
 
   arma::mat sigma_ss(P, P, arma::fill::zeros);
   double elbo = 0.0, elbo_obj = 0.0, elbo_lap = 0.0;
-  long fncount = 0, grcount = 0, nfail = 0, ncholfix = 0;
+  long fncount = 0, grcount = 0, nfail = 0, ncholfix = 0, nfallback = 0;
   for (arma::uword b = 0; b < nb; ++b) {                    // fixed order
     if (!out[b].err.empty()) Rcpp::stop("E-step: " + out[b].err);
     sigma_ss += out[b].sigma_ss;
     elbo += out[b].elbo; elbo_obj += out[b].elbo_obj; elbo_lap += out[b].elbo_lap;
     fncount += out[b].fncount; grcount += out[b].grcount;
-    nfail += out[b].nfail; ncholfix += out[b].ncholfix;
+    nfail += out[b].nfail; ncholfix += out[b].ncholfix; nfallback += out[b].nnewtonfallback;
   }
 
   // ---- pass 2: phi, parallel over words ----
@@ -492,6 +576,7 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
     Rcpp::Named("grcount")  = (double)grcount,
     Rcpp::Named("nfail")    = (double)nfail,
     Rcpp::Named("ncholfix") = (double)ncholfix,
+    Rcpp::Named("nNewtonFallback") = (double)nfallback,
     Rcpp::Named("logZNodes")   = logZMode == 1 ? (double)nrm_herm->n_nodes() : NA_REAL,
     Rcpp::Named("logZOutside") = logZMode == 1 ? (double)nrm_herm->n_outside() : NA_REAL,
     Rcpp::Named("logZLo")      = logZMode == 1 ? a_lo : NA_REAL,

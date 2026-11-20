@@ -196,8 +196,13 @@ struct TopicFit {
   // wrong, so it falls back to coordinate descent.
   void solve(double& c1, double& c2, double lambda, double tol,
              long& n_sweep, long& n_newton) const {
+    // Along the path the warm start usually already has both coefficients
+    // active with the right signs; then the joint Newton step below converges
+    // in one or two iterations and the coordinate sweeps are wasted work. Go
+    // straight to it (a sign flip still falls back to coordinate descent).
+    const bool warm_both = (c1 != 0.0 && c2 != 0.0);
     // phase 1: coordinate sweeps until the active pattern is stable
-    for (int sweep = 0; sweep < 100; ++sweep) {
+    if (!warm_both) for (int sweep = 0; sweep < 100; ++sweep) {
       const double p1 = c1, p2 = c2;
       c1 = update_b1(c2, lambda);
       c2 = update_b2(c1, c2, lambda);

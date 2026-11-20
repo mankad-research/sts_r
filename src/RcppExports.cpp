@@ -94,6 +94,35 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// sts_fastanchor_cpp
+Rcpp::IntegerVector sts_fastanchor_cpp(const arma::mat& Qbar_in, int K, int cores);
+RcppExport SEXP _sts_sts_fastanchor_cpp(SEXP Qbar_inSEXP, SEXP KSEXP, SEXP coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type Qbar_in(Qbar_inSEXP);
+    Rcpp::traits::input_parameter< int >::type K(KSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(sts_fastanchor_cpp(Qbar_in, K, cores));
+    return rcpp_result_gen;
+END_RCPP
+}
+// sts_expgrad_rows_cpp
+Rcpp::List sts_expgrad_rows_cpp(const arma::mat& ytX, const arma::mat& XtX, const Rcpp::IntegerVector& anchor, double tol, int max_its, int cores);
+RcppExport SEXP _sts_sts_expgrad_rows_cpp(SEXP ytXSEXP, SEXP XtXSEXP, SEXP anchorSEXP, SEXP tolSEXP, SEXP max_itsSEXP, SEXP coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type ytX(ytXSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type XtX(XtXSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type anchor(anchorSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    Rcpp::traits::input_parameter< int >::type max_its(max_itsSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(sts_expgrad_rows_cpp(ytX, XtX, anchor, tol, max_its, cores));
+    return rcpp_result_gen;
+END_RCPP
+}
 // stm_lhoodcpp
 double stm_lhoodcpp(SEXP eta, SEXP beta, SEXP doc_ct, SEXP mu, SEXP siginv);
 RcppExport SEXP _sts_stm_lhoodcpp(SEXP etaSEXP, SEXP betaSEXP, SEXP doc_ctSEXP, SEXP muSEXP, SEXP siginvSEXP) {
@@ -199,6 +228,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_sts_sts_estep_cpp", (DL_FUNC) &_sts_sts_estep_cpp, 15},
     {"_sts_sts_optkappa_cpp", (DL_FUNC) &_sts_sts_optkappa_cpp, 13},
     {"_sts_sts_poislasso_path_cpp", (DL_FUNC) &_sts_sts_poislasso_path_cpp, 7},
+    {"_sts_sts_fastanchor_cpp", (DL_FUNC) &_sts_sts_fastanchor_cpp, 3},
+    {"_sts_sts_expgrad_rows_cpp", (DL_FUNC) &_sts_sts_expgrad_rows_cpp, 6},
     {"_sts_stm_lhoodcpp", (DL_FUNC) &_sts_stm_lhoodcpp, 5},
     {"_sts_stm_gradcpp", (DL_FUNC) &_sts_stm_gradcpp, 5},
     {"_sts_stm_hpbcpp", (DL_FUNC) &_sts_stm_hpbcpp, 6},

@@ -197,13 +197,13 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
   if (initialization == "anchor") {
     ## anchor words (spectral) initialization; see stmInit() in R/stmPort.R
     mod.out <- suppressWarnings(stmInit(corpus$documents, corpus$vocab, K, X = X,
-                                        max.em.its = 0))
+                                        max.em.its = 0, cores = cores))
   } else if (initialization == "stm") {
     ## stm initialization: fit an STM with initializationVar as the content
     ## covariate (internal implementation; the stm package is not required)
     if (is.null(stmSeed))
       mod.out <- suppressWarnings(stmInit(corpus$documents, corpus$vocab, K, X = X,
-                                          content = X_seed, max.em.its = 100))
+                                          content = X_seed, max.em.its = 100, cores = cores))
     else
       mod.out <- stmSeed
   }

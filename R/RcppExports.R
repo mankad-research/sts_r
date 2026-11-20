@@ -17,6 +17,14 @@ sts_poislasso_path_cpp <- function(y, offset, abar, nlambda, lambda_min_ratio, d
     .Call(`_sts_sts_poislasso_path_cpp`, y, offset, abar, nlambda, lambda_min_ratio, devmax, tol)
 }
 
+sts_fastanchor_cpp <- function(Qbar_in, K, cores = 1L) {
+    .Call(`_sts_sts_fastanchor_cpp`, Qbar_in, K, cores)
+}
+
+sts_expgrad_rows_cpp <- function(ytX, XtX, anchor, tol = 1e-7, max_its = 500L, cores = 1L) {
+    .Call(`_sts_sts_expgrad_rows_cpp`, ytX, XtX, anchor, tol, max_its, cores)
+}
+
 stm_lhoodcpp <- function(eta, beta, doc_ct, mu, siginv) {
     .Call(`_sts_stm_lhoodcpp`, eta, beta, doc_ct, mu, siginv)
 }

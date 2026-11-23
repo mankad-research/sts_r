@@ -19,7 +19,10 @@
 //                n = numGroups*K        [matched to 2.4e-16 relative]
 //   the grid    = lambda_max * r^t, r = lambda.min.ratio^(1/(nlambda-1)),
 //                 built at full length regardless of truncation
-//   truncation  = stop after the first lambda with dev.ratio > devmax (0.999)
+//   truncation  = glmnet's two stopping rules, from the 5th point on: stop
+//                 after a lambda whose dev.ratio exceeds devmax (0.999) or
+//                 rose by less than a relative 1e-4 over the last 4 points
+//                 (see GlmnetTruncation)
 //
 // The per-lambda subproblems are solved to a tighter tolerance than glmnet's
 // default thresh, by coordinate descent with a safeguarded 1-D Newton step per
@@ -33,9 +36,34 @@
 #include "fpu.h"
 #include <vector>
 #include <cmath>
+#include <algorithm>
 // [[Rcpp::depends(RcppArmadillo, RcppParallel)]]
 
 namespace {
+
+// glmnet's path truncation for the Poisson family (glmnetpp elnet_path/base.hpp
+// and poisson_base.hpp; the same in glmnet 4.1-8 and 5.2). From the mnl-th
+// point on, mnl = min(mnlam = 5, nlambda), the path stops after a point whose
+// deviance ratio exceeds devmax (0.999), or whose deviance ratio rose by less
+// than a relative sml over the last mnl - 1 points; for Poisson, sml is
+// 10 * fdev = 1e-4. sts 1.7 before this applied only the devmax rule, so on
+// words where the fdev rule fires first it walked further down the path than
+// glmnet (its AIC could then choose a point glmnet never reaches).
+class GlmnetTruncation {
+  int mnl_; double devmax_; std::vector<double> dr_;
+public:
+  static constexpr double sml = 1e-4;
+  GlmnetTruncation(int nlambda, double devmax)
+    : mnl_(std::min(5, nlambda)), devmax_(devmax) { dr_.reserve(nlambda); }
+  // Record the deviance ratio of the point just fitted; true = stop after it.
+  bool stop(double devratio) {
+    dr_.push_back(devratio);
+    const int lmu = (int)dr_.size();
+    if (lmu < mnl_) return false;
+    const double prev = dr_[lmu - mnl_];
+    return (devratio - prev) / devratio < sml || devratio > devmax_;
+  }
+};
 
 // Poisson deviance contribution, with the y log(y/mu) term understood as 0
 // at y = 0 (its limit).
@@ -368,6 +396,7 @@ struct OptKappaWorker : public RcppParallel::Worker {
       // starts), then solve exactly there and take that point.
       const double lam_fix = (select == 2) ? lambda_fixed[v] : 0.0;
       bool fixed_done = false;
+      GlmnetTruncation trunc(nlambda, devmax);
       for (int t = 0; t < nlambda; ++t, lambda *= r) {
         if (select == 2 && (lambda <= lam_fix || t == nlambda - 1)) {
           lambda = std::max(lam_fix, 0.0); fixed_done = true;
@@ -417,10 +446,10 @@ struct OptKappaWorker : public RcppParallel::Worker {
           for (arma::uword k = 0; k < K; ++k) if (b1[k] != 0.0 || b2[k] != 0.0) ++active;
           if (2.0 * (double)active >= best_ic) break;
         }
-        // glmnet's truncation: stop after the first lambda whose dev.ratio
-        // exceeds devmax. Guard nulldev == 0 (a word absent from every group).
+        // glmnet's truncation (see GlmnetTruncation). Guard nulldev == 0 (a
+        // word absent from every group).
         const double devratio = (nulldev > 0.0) ? 1.0 - dev / nulldev : 1.0;
-        if (devratio > devmax) break;
+        if (trunc.stop(devratio)) break;
       }
 
       // ---- damped update; damping = 0.5 reproduces 1.6's (coef + kappa)/2 ----
@@ -535,6 +564,7 @@ Rcpp::List sts_poislasso_path_cpp(const arma::vec& y, const arma::vec& offset,
   arma::mat beta(2 * K, nlambda, arma::fill::zeros);
   long ns = 0, nn = 0;
   double lambda = lambda_max;
+  GlmnetTruncation trunc(nlambda, devmax);
   int t = 0;
   for (; t < nlambda; ++t, lambda *= r) {
     double d = 0.0, pen = 0.0; int df = 0;
@@ -552,7 +582,7 @@ Rcpp::List sts_poislasso_path_cpp(const arma::vec& y, const arma::vec& offset,
     lam.push_back(lambda); dev.push_back(d); dfv.push_back(df);
     obj.push_back(0.5 * d * inv_n + lambda * pen);   // glmnet's penalised objective
     const double dr = (nulldev > 0.0) ? 1.0 - d / nulldev : 1.0;
-    if (dr > devmax) { ++t; break; }
+    if (trunc.stop(dr)) { ++t; break; }
   }
   return Rcpp::List::create(
     Rcpp::Named("lambda") = lam, Rcpp::Named("dev") = dev,

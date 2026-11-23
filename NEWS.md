@@ -23,11 +23,11 @@ about 517 s in sts 1.6 (96x and 181x).
   `"auto"` uses interpolation when it is cheaper.
 * The kappa M-step uses a dedicated Poisson-lasso solver (`src/poislasso.cpp`)
   instead of one `glmnet()` call per word. It reproduces glmnet's lambda grid,
-  path truncation and AIC selection, has a closed form when
+  both of its path-truncation rules and AIC selection, has a closed form when
   `initializationVar` has two levels, and solves each problem to a tighter
   tolerance than glmnet's default. `kappaSolver = "glmnet"` keeps the old path.
-* The spectral initialization (anchor words) runs in C++ with the same
-  results and a fraction of the memory.
+* The spectral initialization (anchor words) runs in C++ and needs a fraction
+  of the memory.
 * New argument `cores`: the E-step, the M-step and the initialization run in
   parallel with RcppParallel. Results are identical for any number of threads.
   The default is `getOption("sts.cores", 1L)`.
@@ -56,15 +56,36 @@ about 517 s in sts 1.6 (96x and 181x).
   0, inflating topic K's proportion and biasing all prevalence estimates. Fixed;
   sentiment-discourse tables were not affected. Prevalence results from earlier
   versions should be recomputed.
+* **Anchor-word initialization.** The RecoverL2 step of the spectral
+  initialization (`initialization = "anchor"`, the default) finds, for each
+  word, the weights on the simplex that best reconstruct its co-occurrence row
+  from the anchor words. stm and sts 1.1 to 1.6 solved this by exponentiated
+  gradient with a fixed step of 50, about 100 times too large for these
+  problems: on the Gadarian corpus 454 of 462 words never converged, the
+  iterates oscillated until the 500-iteration cap, and a rounding-level change
+  in the inputs could change the weights completely. The initialization was
+  therefore neither the least-squares solution nor the same on different
+  platforms. sts 1.7 solves each problem to convergence (projected gradient
+  with exact projection onto the simplex), reaching at least as good a fit for
+  every word and the same initialization on every platform. Fitted models
+  differ from 1.6; on the Gadarian corpus, held-out likelihood was better at
+  K = 3, similar at K = 5 and slightly worse at K = 10.
+  `options(sts.recoverL2 = "expgrad")` restores the old solver.
+* **Kappa M-step path truncation.** glmnet stops a lambda path when the
+  deviance ratio exceeds 0.999 or when it has improved by less than a
+  relative 1e-4 over the last four points. The C++ solver applied only the
+  first rule, so on some words it searched further down the path than glmnet
+  and AIC could select a point glmnet never reaches. It now applies both.
 * The M-step solver and the log-partition interpolation change results in the
   last digits. Because AIC selection is discontinuous at near-ties, such
   differences (and differences between platforms) occasionally change the
   penalty chosen for a word; fitted topics and regression coefficients are
   essentially unaffected.
 
-To reproduce an sts 1.6 fit (up to floating-point reassociation), use
-`kappaSolver = "glmnet"`, `logZ = "exact"`, `allow.neg.change = TRUE` and
-`options(sts.kappaDamping = 0.5)`.
+To reproduce an sts 1.6 fit (up to floating-point reassociation, and on the
+same platform), use `kappaSolver = "glmnet"`, `logZ = "exact"`,
+`allow.neg.change = TRUE` and
+`options(sts.kappaDamping = 0.5, sts.recoverL2 = "expgrad")`.
 
 ## Removed and deprecated
 

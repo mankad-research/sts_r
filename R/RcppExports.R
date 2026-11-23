@@ -25,6 +25,10 @@ sts_expgrad_rows_cpp <- function(ytX, XtX, anchor, tol = 1e-7, max_its = 500L, c
     .Call(`_sts_sts_expgrad_rows_cpp`, ytX, XtX, anchor, tol, max_its, cores)
 }
 
+sts_simplexls_rows_cpp <- function(ytX, XtX, anchor, L, tol = 1e-14, max_its = 1000L, cores = 1L) {
+    .Call(`_sts_sts_simplexls_rows_cpp`, ytX, XtX, anchor, L, tol, max_its, cores)
+}
+
 stm_lhoodcpp <- function(eta, beta, doc_ct, mu, siginv) {
     .Call(`_sts_stm_lhoodcpp`, eta, beta, doc_ct, mu, siginv)
 }

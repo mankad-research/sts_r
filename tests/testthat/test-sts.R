@@ -34,11 +34,19 @@ test_that("fits are reproducible and identical for any number of threads", {
   expect_identical(a$kappa, c2$kappa)
 })
 
+## One iteration isolates the interpolation error. Over several iterations
+## AIC selection can tip at a near-tie (the selected lambda moves to the
+## neighbouring grid point), which turns a ~1e-12 difference into ~1e-3 in
+## kappa, so the longer comparison is loose.
 test_that("exact and interpolated log-partition fits agree", {
+  e <- fit_gad(logZ = "exact", maxIter = 1)
+  i <- fit_gad(logZ = "interpolated", maxIter = 1)
+  expect_equal(i$elbo, e$elbo, tolerance = 1e-10)
+  expect_equal(i$alpha, e$alpha, tolerance = 1e-5)
   e <- fit_gad(logZ = "exact", maxIter = 4)
   i <- fit_gad(logZ = "interpolated", maxIter = 4)
-  expect_equal(i$elbo, e$elbo, tolerance = 1e-8)
-  expect_equal(i$alpha, e$alpha, tolerance = 1e-5)
+  expect_equal(i$elbo, e$elbo, tolerance = 1e-4)
+  expect_equal(i$alpha, e$alpha, tolerance = 1e-2)
 })
 
 test_that("the best iterate is returned and stopping follows allow.neg.change", {

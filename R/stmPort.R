@@ -196,25 +196,45 @@ fastAnchor_R <- function(Qbar, K) {
   basis
 }
 
-## RecoverL2 procedure of Arora et al. (exponentiated gradient solver).
-## The per-word exponentiated-gradient fits run in C++, in parallel over words
-## (src/spectral.cpp), reproducing expgrad()'s arithmetic; the products they
-## need are formed here exactly as expgrad() would form them. The R version is
-## kept as recoverL2_R for tests.
+## RecoverL2 procedure of Arora et al. (2013): for each non-anchor word i,
+## the weights C_i on the simplex minimizing ||Qbar[i, ] - C_i Qbar[anchor, ]||^2.
+##
+## sts 1.7 solves each problem to convergence by projected gradient (step 1/L,
+## L = 2 * largest eigenvalue of XtX, exact Euclidean projection onto the
+## simplex). The problem is strictly convex and well conditioned (condition
+## number about 2 on the test corpora), so this converges geometrically and
+## the solution does not depend on rounding. stm and sts 1.1-1.6 used
+## exponentiated gradient with a fixed step eta = 50, which is about 100 times
+## too large for these problems: the iterates oscillate between vertices until
+## the 500-iteration cap, so the weights were neither the least-squares
+## solution nor reproducible across platforms (a 1e-15 perturbation of the
+## inputs could change them by 1). options(sts.recoverL2 = "expgrad") restores
+## that solver, for regression tests against 1.6.
+##
+## The per-word fits run in C++, in parallel over words (src/spectral.cpp);
+## recoverL2_R() is the R reference used in the tests. Weights that are zero
+## at the solution are set to .Machine$double.eps, as stm does.
 recoverL2 <- function(Qbar, anchor, wprob, cores = 1L) {
   X    <- Qbar[anchor, ]
   XtX  <- tcrossprod(X)
   ytX  <- Qbar %*% t(X)     # row i is y %*% t(X) for y = Qbar[i, ], as in expgrad()
-  W    <- sts_expgrad_rows_cpp(ytX, XtX, as.integer(anchor), 1e-7, 500L,
-                               as.integer(cores))$weights
+  if (identical(getOption("sts.recoverL2", "simplex"), "expgrad")) {
+    W <- sts_expgrad_rows_cpp(ytX, XtX, as.integer(anchor), 1e-7, 500L,
+                              as.integer(cores))$weights
+  } else {
+    W <- sts_simplexls_rows_cpp(ytX, XtX, as.integer(anchor), simplexLS_L(XtX),
+                                1e-14, 1000L, as.integer(cores))$weights
+  }
   A <- W * wprob
   A <- t(A) / colSums(A)
   list(A = A)
 }
 
-recoverL2_R <- function(Qbar, anchor, wprob) {
+recoverL2_R <- function(Qbar, anchor, wprob, solver = c("simplex", "expgrad")) {
+  solver <- match.arg(solver)
   X <- Qbar[anchor, ]
   XtX <- tcrossprod(X)
+  L <- simplexLS_L(XtX)
   condprob <- vector(mode = "list", length = nrow(Qbar))
   for (i in 1:nrow(Qbar)) {
     if (i %in% anchor) {
@@ -223,7 +243,8 @@ recoverL2_R <- function(Qbar, anchor, wprob) {
       condprob[[i]] <- vec
     } else {
       y <- Qbar[i, ]
-      solution <- expgrad(X, y, XtX)$par
+      solution <- if (solver == "simplex") simplexLS(drop(y %*% t(X)), XtX, L)$par
+                  else expgrad(X, y, XtX)$par
       if (any(solution <= 0)) {
         solution[solution <= 0] <- .Machine$double.eps
       }
@@ -236,7 +257,38 @@ recoverL2_R <- function(Qbar, anchor, wprob) {
   list(A = A)
 }
 
-## Exponentiated gradient with L2 loss
+## Lipschitz constant of the gradient of ||y - alpha X||^2: twice the largest
+## eigenvalue of XtX.
+simplexLS_L <- function(XtX) {
+  2 * max(eigen(XtX, symmetric = TRUE, only.values = TRUE)$values)
+}
+
+## Euclidean projection onto the unit simplex (sort-based; Held, Wolfe and
+## Crowder 1974; Duchi et al. 2008).
+projSimplex <- function(v) {
+  u <- sort(v, decreasing = TRUE)
+  cs <- cumsum(u)
+  r <- max(which(u - (cs - 1) / seq_along(u) > 0))
+  pmax(v - (cs[r] - 1) / r, 0)
+}
+
+## min ||y - alpha X||^2 over the simplex by projected gradient, with
+## yx = y %*% t(X). Stops when no weight moves by more than tol.
+simplexLS <- function(yx, XtX, L = simplexLS_L(XtX), tol = 1e-14, max.its = 1000) {
+  K <- length(yx)
+  alpha <- rep(1 / K, K)
+  converged <- FALSE
+  for (its in seq_len(max.its)) {
+    grad <- 2 * (drop(alpha %*% XtX) - yx)
+    new <- projSimplex(alpha - grad / L)
+    converged <- max(abs(new - alpha)) < tol
+    alpha <- new
+    if (converged) break
+  }
+  list(par = alpha, its = its, converged = converged)
+}
+
+## Exponentiated gradient with L2 loss (stm's solver; see recoverL2 above)
 expgrad <- function(X, y, XtX = NULL, alpha = NULL, tol = 1e-7, max.its = 500) {
   if (is.null(alpha)) alpha <- 1 / nrow(X)
   alpha <- matrix(alpha, nrow = 1, ncol = nrow(X))

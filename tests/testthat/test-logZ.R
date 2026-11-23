@@ -34,11 +34,16 @@ test_that("quintic Hermite interpolation is accurate and converges at the quinti
     hm <- sts:::sts_logZ_probe(kt, ks, mv, a, 1L, -3, 3, h)
     c(f = max(abs(hm$f - ex$f)), d1 = max(abs(hm$d1 - ex$d1)), d2 = max(abs(hm$d2 - ex$d2)))
   }
-  ## at the default spacing
-  e <- err(0.01)
-  expect_lt(e[["f"]],  1e-12)
-  expect_lt(e[["d1"]], 1e-10)
-  expect_lt(e[["d2"]], 1e-8)
+  ## at the default spacing, relative to the theoretical scale: the quintic
+  ## Hermite error is O(h^6 f^(6)) for the value, O(h^5 f^(6)) for d1 and
+  ## O(h^4 f^(6)) for d2, and the j-th derivative of logZ in a is a cumulant
+  ## of kappa_s, bounded by S^j with S = max|kappa_s|. The constants observed
+  ## are 1e-5 to 1e-4 on fits with S from 3 to 6.5.
+  h <- 0.01; S <- max(abs(ks))
+  e <- err(h)
+  expect_lt(e[["f"]]  / (h^6 * S^6), 1e-3)
+  expect_lt(e[["d1"]] / (h^5 * S^6), 1e-3)
+  expect_lt(e[["d2"]] / (h^4 * S^6), 1e-3)
   ## observed orders, from spacings 0.2 -> 0.05 (theory: 6, 5, 4)
   E <- sapply(c(0.2, 0.1, 0.05), err)
   slope <- function(r) unname(coef(lm(log2(E[r, ]) ~ log2(c(0.2, 0.1, 0.05))))[2])

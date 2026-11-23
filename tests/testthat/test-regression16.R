@@ -2,13 +2,15 @@
 ##
 ## fixtures/ref16_gadarian.rds holds two fits made with sts 1.6 (CRAN) on the
 ## same corpus and seeds: K = 3 (seed 101) and K = 5 (seed 102), maxIter = 50,
-## default settings. sts 1.7 changed two defaults that alter results -- the
-## kappa update no longer averages with the previous value, and the best
-## iterate is returned -- and its default solvers differ from 1.6's in the last
+## default settings. sts 1.7 changed three defaults that alter results -- the
+## kappa update no longer averages with the previous value, the best iterate
+## is returned, and recoverL2 in the anchor initialization is solved to
+## convergence -- and its default solvers differ from 1.6's in the last
 ## digits. The configuration below switches all of that back, so 1.7 must
 ## reproduce the 1.6 fits up to floating-point reassociation:
 ##   kappaSolver = "glmnet", logZ = "exact", allow.neg.change = TRUE,
-##   estepOptimizer = "bfgs", options(sts.kappaDamping = 0.5).
+##   estepOptimizer = "bfgs",
+##   options(sts.kappaDamping = 0.5, sts.recoverL2 = "expgrad").
 ##
 ## Exact agreement relies on the same glmnet, BLAS and libm as the machine
 ## that made the fixtures (Ubuntu 24.04, R 4.3.3, glmnet 4.1-8): AIC selection
@@ -22,7 +24,7 @@ test_that("1.7 reproduces sts 1.6 in the 1.6 configuration", {
               "set STS_REGRESSION_TESTS=true to compare with the sts 1.6 fixtures")
   ref <- readRDS(test_path("fixtures", "ref16_gadarian.rds"))
   cp <- gad_corpus()
-  old <- options(sts.kappaDamping = 0.5); on.exit(options(old))
+  old <- options(sts.kappaDamping = 0.5, sts.recoverL2 = "expgrad"); on.exit(options(old))
   for (nm in names(ref)) {
     r <- ref[[nm]]; K <- ncol(r$kappa_t)
     set.seed(r$seed)

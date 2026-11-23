@@ -1,6 +1,8 @@
 // spectral.cpp -- C++ versions of the two expensive steps of the spectral
 // (anchor-word) initialization ported from stm: fastAnchor() and the
-// per-word exponentiated-gradient fits inside recoverL2().
+// per-word fits inside recoverL2() (sts 1.7: simplex-constrained least
+// squares by projected gradient; stm's exponentiated gradient is kept for
+// options(sts.recoverL2 = "expgrad")).
 //
 // Why: at V = 6084 the R versions took 7-20 s (fastAnchor) and 2.5-7 s
 // (recoverL2) with peak memory 2.1-2.4 GB, roughly ten dense V x V copies:
@@ -19,6 +21,9 @@
 #include "fpu.h"
 #include <vector>
 #include <cmath>
+#include <algorithm>
+#include <functional>
+#include <limits>
 // [[Rcpp::depends(RcppArmadillo, RcppParallel)]]
 
 namespace {
@@ -193,4 +198,94 @@ Rcpp::List sts_expgrad_rows_cpp(const arma::mat& ytX, const arma::mat& XtX,
   ExpgradWorker w(ytX, XtX, ap, tol, max_its, W, its);
   RcppParallel::parallelFor(0, V, w, 16, cores < 1 ? 1 : cores);
   return Rcpp::List::create(Rcpp::Named("weights") = W, Rcpp::Named("its") = its);
+}
+
+namespace {
+
+// Euclidean projection of v (length K) onto the unit simplex, in place
+// (sort-based; as projSimplex() in R/stmPort.R).
+inline void proj_simplex(std::vector<double>& v, std::vector<double>& u) {
+  const int K = (int)v.size();
+  u = v;
+  std::sort(u.begin(), u.end(), std::greater<double>());
+  double cs = 0.0, theta = 0.0;
+  for (int r = 0; r < K; ++r) {
+    cs += u[r];
+    const double t = (cs - 1.0) / (double)(r + 1);
+    if (u[r] - t > 0.0) theta = t;     // the last r with u_r > t_r gives theta
+  }
+  for (int k = 0; k < K; ++k) v[k] = std::max(v[k] - theta, 0.0);
+}
+
+// One word's simplex-constrained least-squares fit by projected gradient, as
+// simplexLS() in R/stmPort.R. ytX: that word's row of Qbar %*% t(X) (K);
+// XtX: K x K; L: twice the largest eigenvalue of XtX.
+struct SimplexLSWorker : public RcppParallel::Worker {
+  FpuState fpu_;   // x87 state of the constructing (main) thread; see fpu.h
+  const arma::mat& ytX;      // V x K
+  const arma::mat& XtX;      // K x K
+  const std::vector<int>& anchor_pos;   // -1, or position among the anchors
+  const double L, tol; const int max_its;
+  arma::mat& W;              // V x K output weights
+  std::vector<int>& its_out;
+  std::vector<int>& conv_out;
+
+  SimplexLSWorker(const arma::mat& ytX_, const arma::mat& XtX_, const std::vector<int>& ap,
+                  double L_, double tol_, int max_its_, arma::mat& W_,
+                  std::vector<int>& its_, std::vector<int>& conv_)
+    : ytX(ytX_), XtX(XtX_), anchor_pos(ap), L(L_), tol(tol_), max_its(max_its_),
+      W(W_), its_out(its_), conv_out(conv_) {}
+
+  void operator()(std::size_t i0, std::size_t i1) {
+    FpuGuard fpu_guard(fpu_);
+    const int K = (int)XtX.n_rows;
+    std::vector<double> alpha(K), v(K), u(K);
+    for (std::size_t i = i0; i < i1; ++i) {
+      if (anchor_pos[i] >= 0) {
+        for (int k = 0; k < K; ++k) W(i, k) = 0.0;
+        W(i, anchor_pos[i]) = 1.0;
+        its_out[i] = 0; conv_out[i] = 1;
+        continue;
+      }
+      for (int k = 0; k < K; ++k) alpha[k] = 1.0 / (double)K;
+      int its = 0; bool converged = false;
+      while (its < max_its && !converged) {
+        ++its;
+        for (int j = 0; j < K; ++j) {           // v = alpha - grad / L
+          double z = 0.0;
+          for (int r = 0; r < K; ++r) z += alpha[r] * XtX(r, j);
+          v[j] = alpha[j] - 2.0 * (z - ytX(i, j)) / L;
+        }
+        proj_simplex(v, u);
+        double step = 0.0;
+        for (int k = 0; k < K; ++k) step = std::max(step, std::fabs(v[k] - alpha[k]));
+        alpha.swap(v);
+        converged = step < tol;
+      }
+      for (int k = 0; k < K; ++k)
+        W(i, k) = (alpha[k] <= 0.0) ? std::numeric_limits<double>::epsilon() : alpha[k];
+      its_out[i] = its; conv_out[i] = converged ? 1 : 0;
+    }
+  }
+};
+
+}  // namespace
+
+// The per-word fits of recoverL2() (sts 1.7 default): the simplex-constrained
+// least-squares weights, V x K, with anchors as unit vectors and zero weights
+// set to .Machine$double.eps. Independent over words, so the result does not
+// depend on the thread count.
+// [[Rcpp::export]]
+Rcpp::List sts_simplexls_rows_cpp(const arma::mat& ytX, const arma::mat& XtX,
+                                  const Rcpp::IntegerVector& anchor, double L,
+                                  double tol = 1e-14, int max_its = 1000, int cores = 1) {
+  const arma::uword V = ytX.n_rows, K = ytX.n_cols;
+  std::vector<int> ap(V, -1);
+  for (int a = 0; a < anchor.size(); ++a) ap[anchor[a] - 1] = a;
+  arma::mat W(V, K);
+  std::vector<int> its(V), conv(V);
+  SimplexLSWorker w(ytX, XtX, ap, L, tol, max_its, W, its, conv);
+  RcppParallel::parallelFor(0, V, w, 16, cores < 1 ? 1 : cores);
+  return Rcpp::List::create(Rcpp::Named("weights") = W, Rcpp::Named("its") = its,
+                            Rcpp::Named("converged") = conv);
 }

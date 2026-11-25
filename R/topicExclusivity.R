@@ -47,9 +47,8 @@
 #' @export
 topicExclusivity = function (object, M = 10, frexw = 0.7) 
 {
-  K <- (1 + ncol(object$alpha))/2
-  beta <- exp(object$mv + object$kappa$kappa_t + object$kappa$kappa_s %*% diag(apply(object$alpha[,1:K+K-1], 2, mean)))
-  beta <- t(apply(beta, 1, function(m) m / colSums(beta)))
+  .check_sts(object)
+  beta <- .sts_beta(object, .sts_alpha_s(object))
     
   w <- frexw
   tbeta <- beta
@@ -58,7 +57,7 @@ topicExclusivity = function (object, M = 10, frexw = 0.7)
   ex <- apply(mat, 2, rank)/nrow(mat)
   fr <- apply(tbeta, 2, rank)/nrow(mat)
   frex <- 1/(w/ex + (1 - w)/fr)
-  index <- apply(tbeta, 2, order, decreasing = TRUE)[1:M, ]
+  index <- apply(tbeta, 2, order, decreasing = TRUE)[seq_len(min(M, nrow(tbeta))), , drop = FALSE]
   out <- vector(length = ncol(tbeta))
   for (i in 1:ncol(frex)) {
     out[i] <- sum(frex[index[, i], i])

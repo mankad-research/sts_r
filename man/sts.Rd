@@ -9,13 +9,21 @@ sts(
   initializationVar,
   corpus,
   K,
-  maxIter = 100,
+  maxIter = 500,
   convTol = 1e-05,
   initialization = "anchor",
   kappaEstimation = "lasso",
   verbose = TRUE,
   parallelize = FALSE,
-  stmSeed = NULL
+  stmSeed = NULL,
+  logZ = c("auto", "exact", "interpolated"),
+  logZSpacing = 0.01,
+  logZMargin = 2,
+  allow.neg.change = FALSE,
+  patience = 5L,
+  kappaSolver = c("cpp", "glmnet"),
+  cores = getOption("sts.cores", 1L),
+  estepOptimizer = c("bfgs", "newton")
 )
 }
 \arguments{
@@ -38,7 +46,9 @@ the stm package).}
 \item{K}{A positive integer (of size 2 or greater) representing
 the desired number of topics.}
 
-\item{maxIter}{A positive integer representing the max number of VEM iterations allowed.}
+\item{maxIter}{Maximum number of variational EM iterations; default 500 (100
+before sts 1.7). \code{sts()} warns if it stops here before converging, and
+the fit's \code{converged} component records whether it converged.}
 
 \item{convTol}{Convergence tolerance for the variational EM estimation algorithm; Default value = 1e-5.}
 
@@ -56,36 +66,134 @@ document-weighted least-squares fit of the STM content effects on the centered
 levels of \code{initializationVar}, which reproduces the STM topic-word
 distributions exactly when \code{initializationVar} has two levels.}
 
-\item{kappaEstimation}{A character input specifying how kappa should be estimated. \code{"lasso"} (default) allows for
-penalties on the L1 norm.  We estimate a regularization path and then select the optimal
-shrinkage parameter using AIC. \code{"adjusted"} utilizes the lasso penalty with an adjusted aggregated Poisson regression.
-All options use an approximation framework developed in Taddy (2013) called
-Distributed Multinomial Regression which utilizes a factorized poisson
-approximation to the multinomial.  See Chen and Mankad (2025) on the implementation here.}
+\item{kappaEstimation}{How kappa is estimated. The only option is
+\code{"lasso"} (default): for each word, a Poisson regression on the
+expected word-topic counts aggregated within the levels of
+\code{initializationVar}, with an L1 penalty whose strength is chosen by AIC
+along a regularization path. This uses the factorized Poisson approximation
+to the multinomial of Taddy (2013), Distributed Multinomial Regression; see
+Chen and Mankad (2025) on the implementation here. The new coefficients
+replace the old ones at each M-step (sts 1.1 to 1.6 averaged them with the
+previous values). The \code{"adjusted"} option was removed in sts 1.7; it
+now gives a warning and uses \code{"lasso"}.}
 
 \item{verbose}{A logical flag indicating whether information should be
 printed to the screen.}
 
-\item{parallelize}{A logical flag indicating whether to parallelize the estimation using all but one CPU cores on your local machine.}
+\item{parallelize}{Deprecated; use \code{cores}. \code{TRUE} is treated
+as \code{cores = parallel::detectCores() - 1} with a warning.}
 
 \item{stmSeed}{A prefit STM model object (e.g., from \code{stm::stm()} with
 \code{initializationVar} as the content covariate) to initialize the STS model.
 Note this is ignored unless initialization = "stm"}
+
+\item{logZ}{How each topic's log-partition function
+\eqn{\log Z_k(a) = \log \sum_v \exp(mv_v + \kappa_{t[v,k]} + \kappa_{s[v,k]} a)}
+is evaluated in the E-step. Within an E-step this is a fixed one-dimensional
+function of the scalar latent sentiment-discourse value, shared by every
+document, and it is the only part of the objective, gradient and Hessian that
+requires a sum over the whole vocabulary. \code{"exact"} sums over all
+\eqn{V} words on every evaluation, as in sts 1.6. \code{"interpolated"}
+tabulates \eqn{\log Z_k} together with its first two derivatives once per
+E-step and uses quintic Hermite interpolation thereafter, which reduces the
+per-document cost from \eqn{O(VK)} to \eqn{O(n_d K)} for a document with
+\eqn{n_d} distinct words. Values falling outside the tabulated range are
+evaluated exactly, so no value is ever extrapolated. The default,
+\code{"auto"}, uses the table when the corpus is large enough for it to pay
+off and the exact sum otherwise.}
+
+\item{logZSpacing}{Grid spacing for \code{logZ = "interpolated"}; default
+0.01. Accuracy is not monotone in this value: the interpolated second
+derivative divides by the square of the spacing, so very fine grids
+eventually lose accuracy to rounding. 0.01 is near the optimum, and 0.02 is
+slightly faster with essentially the same typical accuracy.}
+
+\item{logZMargin}{How far beyond the observed range of latent
+sentiment-discourse values to tabulate, in the same units; default 2. Larger
+values trade more grid nodes for fewer exact fallbacks and do not change
+accuracy.}
+
+\item{allow.neg.change}{Logical. sts 1.6 and earlier used
+\code{delta < convTol} as the convergence test, so any decrease in the ELBO,
+however large, counted as convergence; on the Gadarian data this stopped 3 of
+4 test fits. The default \code{FALSE} instead tracks the best bound seen and
+returns that iterate, stopping once the bound has decreased for
+\code{patience} consecutive iterations or has stopped changing by more than
+\code{convTol}. This can only improve on the bound the old rule returned from
+the same stopping point. \code{TRUE} restores the 1.6 stopping rule -- stop
+at the first decrease and return the last iterate. (Results from sts 1.6
+are not reproduced exactly in any case: 1.7 also changed the kappa update;
+see \code{kappaEstimation}.)}
+
+\item{patience}{Number of consecutive iterations with a decreasing ELBO
+tolerated before stopping, when \code{allow.neg.change = FALSE}; default 5.
+The bound is not guaranteed to increase monotonically for this model,
+because the AIC step re-selects the lasso penalty at every iteration, and it
+can dip for an iteration or two and then rise again. The iterate with the
+highest bound is returned whatever the value, so a larger \code{patience}
+can only find a later, higher maximum; the cost is up to \code{patience}
+iterations past the one returned. With \code{patience = 1}, a fit on the
+Gadarian data stopped at iteration 2 on such a dip.}
+
+\item{kappaSolver}{Solver for the kappa M-step. \code{"cpp"} (default) uses
+a dedicated Poisson-lasso solver that exploits the separable structure of the
+aggregated design (one two-coefficient problem per topic, sharing the lambda
+path and the AIC selection), with a closed-form solution when the
+initialization variable has two levels. It reproduces glmnet's lambda grid
+and path truncation and solves each problem to a tighter tolerance than
+glmnet's default, so on a small fraction of words it selects a different
+penalty than glmnet did in sts 1.6; in those cases glmnet agrees with it once
+its convergence threshold is tightened. \code{"glmnet"} uses glmnet as in sts
+1.6.}
+
+\item{cores}{Number of threads for the E-step (parallel over documents), the
+kappa M-step (parallel over words) and the spectral initialization; default
+\code{getOption("sts.cores", 1L)}. Results are identical for any number of
+threads: work is divided into blocks that depend only on the data, and
+partial sums are combined in a fixed order.}
+
+\item{estepOptimizer}{Optimizer for each document's variational problem in
+the E-step. \code{"bfgs"} (default) uses the BFGS algorithm of
+\code{stats::optim()}, as in sts 1.6 (ported to C++). \code{"newton"} uses
+Newton's method with the exact Hessian, a capped step, a diagonal shift where
+the Hessian is not positive definite and a backtracking line search; it needs
+about 7 objective evaluations per document instead of about 25 and converges
+to a tighter tolerance. That makes it about three times faster when
+\code{logZ = "exact"}, where each evaluation sums over the vocabulary, but
+no faster with the interpolated log-partition, where evaluations are cheap.
+The per-document objective can have more than one local maximum; the two
+optimizers reach the same one for over 99.5\% of documents in our tests.}
 }
 \value{
-An object of class sts
+An object of class \code{"STS"}, a list with components
 
 \item{alpha}{Estimated prevalence and sentiment-discourse values for each document and topic}
-\item{gamma}{Estimated regression coefficients that determine prevalence and sentiment/discourse for each topic}
+\item{gamma}{Estimated regression coefficients that determine prevalence and
+sentiment/discourse for each topic: one row per covariate (with an intercept),
+and columns for the prevalence of topics 1 to K-1 (relative to topic K) and the
+sentiment-discourse of topics 1 to K. These are the variational-EM point
+estimates, also returned by \code{\link{coef.STS}}; for standard errors that
+account for the uncertainty in the document-level variables, use
+\code{\link{estimateRegns}}.}
 \item{kappa}{Estimated kappa coefficients that determine sentiment-discourse and the topic-word distributions}
 \item{sigma_inv}{Inverse of the covariance matrix for the alpha parameters}
 \item{sigma}{Covariance matrix for the alpha parameters}
 \item{elbo}{the ELBO at each iteration of the estimation algorithm}
+\item{converged}{\code{TRUE} if the fit converged, \code{FALSE} if it
+stopped at \code{maxIter}}
 \item{mv}{the baseline log-transformed occurrence rate of each word in the corpus}
-\item{runtime}{Time elapsed in seconds}
+\item{runtime}{Time elapsed in seconds, including initialization (sts 1.6
+and earlier excluded it)}
 \item{vocab}{Vocabulary vector used}
 \item{mu}{Mean (fitted) values for alpha based on document-level variables * estimated
 Gamma for each document}
+\item{diagnostics}{A data frame with one row per iteration: the bound
+(\code{elbo}), its data-fit and Laplace terms (\code{elboObj},
+\code{elboLap}), and the mean relative changes in alpha and kappa
+(\code{achange}, \code{kchange}). New in sts 1.7.}
+\item{bestIter}{The iteration whose estimates are returned (see
+\code{allow.neg.change}). New in sts 1.7.}
+\item{call}{The matched call. New in sts 1.7.}
 }
 \description{
 Estimation of the STS Model using variational EM.

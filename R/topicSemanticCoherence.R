@@ -60,14 +60,13 @@ topicSemanticCoherence = function (object, corpus, M = 10)
     return(result)
   }
   
-  K <- (1 + ncol(object$alpha))/2
-  beta <- exp(object$mv + object$kappa$kappa_t + object$kappa$kappa_s %*% diag(apply(object$alpha[,1:K+K-1], 2, mean)))
-  beta <- t(apply(beta, 1, function(m) m / colSums(beta)))
-  
+  .check_sts(object)
   documents <- corpus$documents
   vocab <- corpus$vocab
-  
-  beta <- log(beta)
+  if (length(vocab) != length(object$vocab))
+    stop("'corpus' does not have the vocabulary the model was fitted on.", call. = FALSE)
+
+  beta <- .sts_beta(object, .sts_alpha_s(object), log = TRUE)
   triplet <- doc.to.ijv(documents)
   mat <- slam::simple_triplet_matrix(triplet$i, triplet$j, triplet$v)
   colnames(mat) <- vocab

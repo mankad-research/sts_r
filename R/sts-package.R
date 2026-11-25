@@ -45,11 +45,6 @@
 #' @import mvtnorm
 #' @import tm
 #' @import ggplot2
-#' @importFrom foreach foreach
-#' @importFrom foreach %dopar%
-#' @importFrom doParallel registerDoParallel
-#' @importFrom parallel mclapply
-#' @importFrom parallel stopCluster
 #' @importFrom stats model.matrix
 #' @importFrom stats optim
 #' @importFrom stats quantile
@@ -57,5 +52,6 @@
 #' @importFrom stats runif
 #' @importFrom SnowballC wordStem
 #' @importFrom Rcpp evalCpp
+#' @importFrom RcppParallel RcppParallelLibs
 #' @useDynLib sts, .registration = TRUE
 "_PACKAGE"

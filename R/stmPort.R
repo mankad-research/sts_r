@@ -27,7 +27,7 @@
 ## Only the elements of the fitted object that sts uses are returned, using
 ## the same names and structure as an STM object.
 stmInit <- function(documents, vocab, K, X, content = NULL, max.em.its = 0,
-                    emtol = 1e-5) {
+                    emtol = 1e-5, cores = 1L) {
   ## ---- checks on the documents (as in stm::stm) ----
   if (!is.list(documents)) stop("documents must be a list, see documentation.")
   if (!all(unlist(lapply(documents, is.matrix)))) {
@@ -80,7 +80,7 @@ stmInit <- function(documents, vocab, K, X, content = NULL, max.em.its = 0,
 
   ## ---- spectral initialization ----
   maxV <- if (V > 10000) 10000 else NULL
-  beta <- spectralInit(documents, K, V, maxV = maxV)
+  beta <- spectralInit(documents, K, V, maxV = maxV, cores = cores)
   beta <- list(beta = rep(list(beta), A))
   mu <- list(mu = matrix(0, nrow = (K - 1), ncol = 1))
   sigma <- diag(20, nrow = (K - 1))
@@ -119,7 +119,7 @@ stmInit <- function(documents, vocab, K, X, content = NULL, max.em.its = 0,
 
 ## Spectral (anchor word) initialization of the K x V topic-word matrix
 ## (stm.init with mode = "Spectral").
-spectralInit <- function(documents, K, V, maxV = NULL) {
+spectralInit <- function(documents, K, V, maxV = NULL, cores = 1L) {
   if (K >= V) stop("Spectral initialization cannot be used for the overcomplete case (K greater than or equal to number of words in vocab)")
   docs <- doc.to.ijv(documents)
   mat <- Matrix::sparseMatrix(docs$i, docs$j, x = docs$v)
@@ -146,8 +146,8 @@ spectralInit <- function(documents, K, V, maxV = NULL) {
     wprob <- wprob[-temp.remove]
   }
   Q <- Q / Qsums
-  anchor <- fastAnchor(Q, K = K)
-  beta <- recoverL2(Q, anchor, wprob)$A
+  anchor <- fastAnchor(Q, K = K, cores = cores)
+  beta <- recoverL2(Q, anchor, wprob, cores = cores)$A
   if (!is.null(keep)) {
     beta.new <- matrix(0, nrow = K, ncol = V)
     beta.new[, keep] <- beta
@@ -168,8 +168,17 @@ gram <- function(mat) {
   as.matrix(Q)
 }
 
-## Greedy anchor word selection (stabilized Gram-Schmidt)
-fastAnchor <- function(Qbar, K) {
+## Greedy anchor word selection (stabilized Gram-Schmidt).
+## The work is done in C++ (src/spectral.cpp): the R version below (kept as
+## fastAnchor_R for tests) allocates several dense V x V temporaries on each of
+## its K passes (Qbar^2, the outer product, the difference), ~2 GB peak at
+## V = 6084; the C++ version updates one copy in place and reproduces R's
+## arithmetic exactly, so the anchors are identical.
+fastAnchor <- function(Qbar, K, cores = 1L) {
+  sts_fastanchor_cpp(Qbar, as.integer(K), as.integer(cores))
+}
+
+fastAnchor_R <- function(Qbar, K) {
   basis <- c()
   rowSquaredSums <- rowSums(Qbar^2)
   for (i in 1:K) {
@@ -187,10 +196,45 @@ fastAnchor <- function(Qbar, K) {
   basis
 }
 
-## RecoverL2 procedure of Arora et al. (exponentiated gradient solver)
-recoverL2 <- function(Qbar, anchor, wprob) {
+## RecoverL2 procedure of Arora et al. (2013): for each non-anchor word i,
+## the weights C_i on the simplex minimizing ||Qbar[i, ] - C_i Qbar[anchor, ]||^2.
+##
+## sts 1.7 solves each problem to convergence by projected gradient (step 1/L,
+## L = 2 * largest eigenvalue of XtX, exact Euclidean projection onto the
+## simplex). The problem is strictly convex and well conditioned (condition
+## number about 2 on the test corpora), so this converges geometrically and
+## the solution does not depend on rounding. stm and sts 1.1-1.6 used
+## exponentiated gradient with a fixed step eta = 50, which is about 100 times
+## too large for these problems: the iterates oscillate between vertices until
+## the 500-iteration cap, so the weights were neither the least-squares
+## solution nor reproducible across platforms (a 1e-15 perturbation of the
+## inputs could change them by 1). options(sts.recoverL2 = "expgrad") restores
+## that solver, for regression tests against 1.6.
+##
+## The per-word fits run in C++, in parallel over words (src/spectral.cpp);
+## recoverL2_R() is the R reference used in the tests. Weights that are zero
+## at the solution are set to .Machine$double.eps, as stm does.
+recoverL2 <- function(Qbar, anchor, wprob, cores = 1L) {
+  X    <- Qbar[anchor, ]
+  XtX  <- tcrossprod(X)
+  ytX  <- Qbar %*% t(X)     # row i is y %*% t(X) for y = Qbar[i, ], as in expgrad()
+  if (identical(getOption("sts.recoverL2", "simplex"), "expgrad")) {
+    W <- sts_expgrad_rows_cpp(ytX, XtX, as.integer(anchor), 1e-7, 500L,
+                              as.integer(cores))$weights
+  } else {
+    W <- sts_simplexls_rows_cpp(ytX, XtX, as.integer(anchor), simplexLS_L(XtX),
+                                1e-14, 1000L, as.integer(cores))$weights
+  }
+  A <- W * wprob
+  A <- t(A) / colSums(A)
+  list(A = A)
+}
+
+recoverL2_R <- function(Qbar, anchor, wprob, solver = c("simplex", "expgrad")) {
+  solver <- match.arg(solver)
   X <- Qbar[anchor, ]
   XtX <- tcrossprod(X)
+  L <- simplexLS_L(XtX)
   condprob <- vector(mode = "list", length = nrow(Qbar))
   for (i in 1:nrow(Qbar)) {
     if (i %in% anchor) {
@@ -199,7 +243,8 @@ recoverL2 <- function(Qbar, anchor, wprob) {
       condprob[[i]] <- vec
     } else {
       y <- Qbar[i, ]
-      solution <- expgrad(X, y, XtX)$par
+      solution <- if (solver == "simplex") simplexLS(drop(y %*% t(X)), XtX, L)$par
+                  else expgrad(X, y, XtX)$par
       if (any(solution <= 0)) {
         solution[solution <= 0] <- .Machine$double.eps
       }
@@ -212,7 +257,38 @@ recoverL2 <- function(Qbar, anchor, wprob) {
   list(A = A)
 }
 
-## Exponentiated gradient with L2 loss
+## Lipschitz constant of the gradient of ||y - alpha X||^2: twice the largest
+## eigenvalue of XtX.
+simplexLS_L <- function(XtX) {
+  2 * max(eigen(XtX, symmetric = TRUE, only.values = TRUE)$values)
+}
+
+## Euclidean projection onto the unit simplex (sort-based; Held, Wolfe and
+## Crowder 1974; Duchi et al. 2008).
+projSimplex <- function(v) {
+  u <- sort(v, decreasing = TRUE)
+  cs <- cumsum(u)
+  r <- max(which(u - (cs - 1) / seq_along(u) > 0))
+  pmax(v - (cs[r] - 1) / r, 0)
+}
+
+## min ||y - alpha X||^2 over the simplex by projected gradient, with
+## yx = y %*% t(X). Stops when no weight moves by more than tol.
+simplexLS <- function(yx, XtX, L = simplexLS_L(XtX), tol = 1e-14, max.its = 1000) {
+  K <- length(yx)
+  alpha <- rep(1 / K, K)
+  converged <- FALSE
+  for (its in seq_len(max.its)) {
+    grad <- 2 * (drop(alpha %*% XtX) - yx)
+    new <- projSimplex(alpha - grad / L)
+    converged <- max(abs(new - alpha)) < tol
+    alpha <- new
+    if (converged) break
+  }
+  list(par = alpha, its = its, converged = converged)
+}
+
+## Exponentiated gradient with L2 loss (stm's solver; see recoverL2 above)
 expgrad <- function(X, y, XtX = NULL, alpha = NULL, tol = 1e-7, max.its = 500) {
   if (is.null(alpha)) alpha <- 1 / nrow(X)
   alpha <- matrix(alpha, nrow = 1, ncol = nrow(X))
@@ -324,7 +400,7 @@ stmMnreg <- function(beta.ss, K, A, wcounts, interactions = TRUE,
     offset2 <- m[i] + offset
     mod <- NULL
     while (is.null(mod)) {
-      mod <- tryCatch(glmnet::glmnet(x = covar, y = counts[[i]], family = "poisson",
+      mod <- tryCatch(.glmnet_fit(x = covar, y = counts[[i]], family = "poisson",
                                      offset = offset2, standardize = FALSE,
                                      intercept = FALSE,
                                      lambda.min.ratio = lambda.min.ratio,

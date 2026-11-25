@@ -1,4 +1,4 @@
-#' Estimate Hessian Matrix
+#' Hessian of the Document-Level Objective
 #' 
 #' Estimates the Hessian matrix needed for the Variational E-step in C++
 #' 

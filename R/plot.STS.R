@@ -1,4 +1,4 @@
-#' Function for plotting STS objects
+#' Plot the Most Likely Words of Each Topic
 #' 
 #' Produces a plot of the most likely words and their probabilities for each topic for different levels 
 #' of sentiment for an STS object.  
@@ -30,7 +30,8 @@ plot.STS <- function(x,
                      n=10, topics=NULL,
                      lowerPercentile = 0.05, upperPercentile = 0.95,
                      ...){
-  numWords <- n
+  .check_sts(x, "x")
+  numWords <- min(n, length(x$vocab))
 
   alpha.est <- x$alpha
   kappa.est <- x$kappa
@@ -41,33 +42,30 @@ plot.STS <- function(x,
   
     
   # full_beta_distn is calculated often in this script -- it is the beta probability distribution in eqn 2 of the paper
-  full_beta_distn <- exp(mv + kappa.est$kappa_t + kappa.est$kappa_s  %*% diag( apply(alpha.est[,1:K+(K-1)], 2, mean)))  
-  full_beta_distn <- t(apply(full_beta_distn, 1, function(m) m / colSums(full_beta_distn)))
+  full_beta_distn <- .sts_beta(x, .sts_alpha_s(x))
   df <- data.frame(index = numWords:1, topic = 1, words = x$vocab[order(full_beta_distn[,1], decreasing = TRUE)[1:numWords]], 
                    kappa = sort(full_beta_distn[,1], decreasing = TRUE)[1:numWords])
-  for (k in 2:K) {
+  for (k in seq_len(K)[-1]) {
     df <- rbind(df, data.frame(index = numWords:1, topic = k, words = x$vocab[order(full_beta_distn[,k], decreasing = TRUE)[1:numWords]],
                                kappa = sort(full_beta_distn[,k], decreasing = TRUE)[1:numWords])
     )
   }
   df$Model <- sprintf("STS: Average")
   
-  full_beta_distn <- exp(mv + kappa.est$kappa_t + kappa.est$kappa_s %*% diag(apply(alpha.est[,1:K+(K-1)], 2, quantile, lowerPercentile)))
-  full_beta_distn <- t(apply(full_beta_distn, 1, function(m) m / colSums(full_beta_distn)))
+  full_beta_distn <- .sts_beta(x, .sts_alpha_s(x, "quantile", lowerPercentile))
   df2 <- data.frame(index = numWords:1, topic = 1, words = x$vocab[order(full_beta_distn[,1], decreasing = TRUE)[1:numWords]], 
                     kappa = sort(full_beta_distn[,1], decreasing = TRUE)[1:numWords])
-  for (k in 2:K) {
+  for (k in seq_len(K)[-1]) {
     df2 <- rbind(df2, data.frame(index = numWords:1, topic = k, words = x$vocab[order(full_beta_distn[,k], decreasing = TRUE)[1:numWords]],
                                  kappa = sort(full_beta_distn[,k], decreasing = TRUE)[1:numWords])
     )
   }
   df2$Model <- "STS: Negative"
   
-  full_beta_distn <- exp(mv + kappa.est$kappa_t + kappa.est$kappa_s %*% diag(apply(alpha.est[,1:K+(K-1)], 2, quantile, upperPercentile)))
-  full_beta_distn <- t(apply(full_beta_distn, 1, function(m) m / colSums(full_beta_distn)))
+  full_beta_distn <- .sts_beta(x, .sts_alpha_s(x, "quantile", upperPercentile))
   df3 <- data.frame(index = numWords:1, topic = 1, words = x$vocab[order(full_beta_distn[,1], decreasing = TRUE)[1:numWords]], 
                     kappa = sort(full_beta_distn[,1], decreasing = TRUE)[1:numWords])
-  for (k in 2:K) {
+  for (k in seq_len(K)[-1]) {
     df3 <- rbind(df3, data.frame(index = numWords:1, topic = k, words = x$vocab[order(full_beta_distn[,k], decreasing = TRUE)[1:numWords]],
                                  kappa = sort(full_beta_distn[,k], decreasing = TRUE)[1:numWords])
     )

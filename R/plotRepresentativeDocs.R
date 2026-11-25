@@ -20,6 +20,8 @@
 #' }
 #' @export 
 plotRepresentativeDocs = function(object, text.cex=1, width=100) {
+  if (!is.data.frame(object) || is.null(object$text))
+    stop("'object' must be the data frame returned by findRepresentativeDocs().", call. = FALSE)
   create_text = function(x) {
     if (x == 1) {
       return("bottom-most quartile (0-25%).")

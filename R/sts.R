@@ -29,7 +29,9 @@
 #' the stm package). 
 #' @param K A positive integer (of size 2 or greater) representing
 #' the desired number of topics. 
-#' @param maxIter A positive integer representing the max number of VEM iterations allowed.
+#' @param maxIter Maximum number of variational EM iterations; default 500 (100
+#' before sts 1.7). \code{sts()} warns if it stops here before converging, and
+#' the fit's \code{converged} component records whether it converged.
 #' @param convTol Convergence tolerance for the variational EM estimation algorithm; Default value = 1e-5.
 #' @param initialization Character argument that allows the user to specify an initialization
 #' method. The default choice, \code{"anchor"} to initialize prevalence according to anchor words and 
@@ -44,31 +46,121 @@
 #' document-weighted least-squares fit of the STM content effects on the centered 
 #' levels of \code{initializationVar}, which reproduces the STM topic-word 
 #' distributions exactly when \code{initializationVar} has two levels.
-#' @param kappaEstimation A character input specifying how kappa should be estimated. \code{"lasso"} (default) allows for 
-#' penalties on the L1 norm.  We estimate a regularization path and then select the optimal
-#' shrinkage parameter using AIC. \code{"adjusted"} utilizes the lasso penalty with an adjusted aggregated Poisson regression. 
-#' All options use an approximation framework developed in Taddy (2013) called
-#' Distributed Multinomial Regression which utilizes a factorized poisson
-#' approximation to the multinomial.  See Chen and Mankad (2025) on the implementation here.
+#' @param kappaEstimation How kappa is estimated. The only option is
+#' \code{"lasso"} (default): for each word, a Poisson regression on the
+#' expected word-topic counts aggregated within the levels of
+#' \code{initializationVar}, with an L1 penalty whose strength is chosen by AIC
+#' along a regularization path. This uses the factorized Poisson approximation
+#' to the multinomial of Taddy (2013), Distributed Multinomial Regression; see
+#' Chen and Mankad (2025) on the implementation here. The new coefficients
+#' replace the old ones at each M-step (sts 1.1 to 1.6 averaged them with the
+#' previous values). The \code{"adjusted"} option was removed in sts 1.7; it
+#' now gives a warning and uses \code{"lasso"}.
 #' @param verbose A logical flag indicating whether information should be
 #' printed to the screen.  
-#' @param parallelize A logical flag indicating whether to parallelize the estimation using all but one CPU cores on your local machine. 
+#' @param parallelize Deprecated; use \code{cores}. \code{TRUE} is treated
+#' as \code{cores = parallel::detectCores() - 1} with a warning.
 #' @param stmSeed A prefit STM model object (e.g., from \code{stm::stm()} with 
 #' \code{initializationVar} as the content covariate) to initialize the STS model. 
 #' Note this is ignored unless initialization = "stm"
-#' @return An object of class sts 
+#' @param logZ How each topic's log-partition function
+#' \eqn{\log Z_k(a) = \log \sum_v \exp(mv_v + \kappa_{t[v,k]} + \kappa_{s[v,k]} a)}
+#' is evaluated in the E-step. Within an E-step this is a fixed one-dimensional
+#' function of the scalar latent sentiment-discourse value, shared by every
+#' document, and it is the only part of the objective, gradient and Hessian that
+#' requires a sum over the whole vocabulary. \code{"exact"} sums over all
+#' \eqn{V} words on every evaluation, as in sts 1.6. \code{"interpolated"}
+#' tabulates \eqn{\log Z_k} together with its first two derivatives once per
+#' E-step and uses quintic Hermite interpolation thereafter, which reduces the
+#' per-document cost from \eqn{O(VK)} to \eqn{O(n_d K)} for a document with
+#' \eqn{n_d} distinct words. Values falling outside the tabulated range are
+#' evaluated exactly, so no value is ever extrapolated. The default,
+#' \code{"auto"}, uses the table when the corpus is large enough for it to pay
+#' off and the exact sum otherwise.
+#' @param logZSpacing Grid spacing for \code{logZ = "interpolated"}; default
+#' 0.01. Accuracy is not monotone in this value: the interpolated second
+#' derivative divides by the square of the spacing, so very fine grids
+#' eventually lose accuracy to rounding. 0.01 is near the optimum, and 0.02 is
+#' slightly faster with essentially the same typical accuracy.
+#' @param logZMargin How far beyond the observed range of latent
+#' sentiment-discourse values to tabulate, in the same units; default 2. Larger
+#' values trade more grid nodes for fewer exact fallbacks and do not change
+#' accuracy.
+#' @param allow.neg.change Logical. sts 1.6 and earlier used
+#' \code{delta < convTol} as the convergence test, so any decrease in the ELBO,
+#' however large, counted as convergence; on the Gadarian data this stopped 3 of
+#' 4 test fits. The default \code{FALSE} instead tracks the best bound seen and
+#' returns that iterate, stopping once the bound has decreased for
+#' \code{patience} consecutive iterations or has stopped changing by more than
+#' \code{convTol}. This can only improve on the bound the old rule returned from
+#' the same stopping point. \code{TRUE} restores the 1.6 stopping rule -- stop
+#' at the first decrease and return the last iterate. (Results from sts 1.6
+#' are not reproduced exactly in any case: 1.7 also changed the kappa update;
+#' see \code{kappaEstimation}.)
+#' @param patience Number of consecutive iterations with a decreasing ELBO
+#' tolerated before stopping, when \code{allow.neg.change = FALSE}; default 5.
+#' The bound is not guaranteed to increase monotonically for this model,
+#' because the AIC step re-selects the lasso penalty at every iteration, and it
+#' can dip for an iteration or two and then rise again. The iterate with the
+#' highest bound is returned whatever the value, so a larger \code{patience}
+#' can only find a later, higher maximum; the cost is up to \code{patience}
+#' iterations past the one returned. With \code{patience = 1}, a fit on the
+#' Gadarian data stopped at iteration 2 on such a dip.
+#' @param kappaSolver Solver for the kappa M-step. \code{"cpp"} (default) uses
+#' a dedicated Poisson-lasso solver that exploits the separable structure of the
+#' aggregated design (one two-coefficient problem per topic, sharing the lambda
+#' path and the AIC selection), with a closed-form solution when the
+#' initialization variable has two levels. It reproduces glmnet's lambda grid
+#' and path truncation and solves each problem to a tighter tolerance than
+#' glmnet's default, so on a small fraction of words it selects a different
+#' penalty than glmnet did in sts 1.6; in those cases glmnet agrees with it once
+#' its convergence threshold is tightened. \code{"glmnet"} uses glmnet as in sts
+#' 1.6.
+#' @param cores Number of threads for the E-step (parallel over documents), the
+#' kappa M-step (parallel over words) and the spectral initialization; default
+#' \code{getOption("sts.cores", 1L)}. Results are identical for any number of
+#' threads: work is divided into blocks that depend only on the data, and
+#' partial sums are combined in a fixed order.
+#' @param estepOptimizer Optimizer for each document's variational problem in
+#' the E-step. \code{"bfgs"} (default) uses the BFGS algorithm of
+#' \code{stats::optim()}, as in sts 1.6 (ported to C++). \code{"newton"} uses
+#' Newton's method with the exact Hessian, a capped step, a diagonal shift where
+#' the Hessian is not positive definite and a backtracking line search; it needs
+#' about 7 objective evaluations per document instead of about 25 and converges
+#' to a tighter tolerance. That makes it about three times faster when
+#' \code{logZ = "exact"}, where each evaluation sums over the vocabulary, but
+#' no faster with the interpolated log-partition, where evaluations are cheap.
+#' The per-document objective can have more than one local maximum; the two
+#' optimizers reach the same one for over 99.5% of documents in our tests.
+#' @return An object of class \code{"STS"}, a list with components
 #' 
 #' \item{alpha}{Estimated prevalence and sentiment-discourse values for each document and topic} 
-#' \item{gamma}{Estimated regression coefficients that determine prevalence and sentiment/discourse for each topic} 
+#' \item{gamma}{Estimated regression coefficients that determine prevalence and
+#' sentiment/discourse for each topic: one row per covariate (with an intercept),
+#' and columns for the prevalence of topics 1 to K-1 (relative to topic K) and the
+#' sentiment-discourse of topics 1 to K. These are the variational-EM point
+#' estimates, also returned by \code{\link{coef.STS}}; for standard errors that
+#' account for the uncertainty in the document-level variables, use
+#' \code{\link{estimateRegns}}.} 
 #' \item{kappa}{Estimated kappa coefficients that determine sentiment-discourse and the topic-word distributions} 
 #' \item{sigma_inv}{Inverse of the covariance matrix for the alpha parameters}
 #' \item{sigma}{Covariance matrix for the alpha parameters} 
 #' \item{elbo}{the ELBO at each iteration of the estimation algorithm}
+#' \item{converged}{\code{TRUE} if the fit converged, \code{FALSE} if it
+#' stopped at \code{maxIter}}
 #' \item{mv}{the baseline log-transformed occurrence rate of each word in the corpus}
-#' \item{runtime}{Time elapsed in seconds} 
+#' \item{runtime}{Time elapsed in seconds, including initialization (sts 1.6
+#' and earlier excluded it)} 
 #' \item{vocab}{Vocabulary vector used} 
 #' \item{mu}{Mean (fitted) values for alpha based on document-level variables * estimated 
 #' Gamma for each document}
+#' \item{diagnostics}{A data frame with one row per iteration: the bound
+#' (\code{elbo}), its data-fit and Laplace terms (\code{elboObj},
+#' \code{elboLap}), and the mean relative changes in alpha and kappa
+#' (\code{achange}, \code{kchange}). New in sts 1.7.}
+#' \item{bestIter}{The iteration whose estimates are returned (see
+#' \code{allow.neg.change}). New in sts 1.7.}
+#' \item{call}{The matched call. New in sts 1.7.}
 #' 
 #' 
 #' @seealso  \code{\link{estimateRegns}}
@@ -95,12 +187,38 @@
 #' ## low max iteration number just for testing
 #' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 1, verbose = FALSE)
 #' @export
-sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL) {
+sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2, allow.neg.change = FALSE, patience = 5L, kappaSolver = c("cpp", "glmnet"), cores = getOption("sts.cores", 1L), estepOptimizer = c("bfgs", "newton")) {
+  call <- match.call()
+  timer_full <- proc.time()[3]
 
   # if (!is.null(seed)) {set.seed(seed)}
   if (!(is.character(initialization) && length(initialization) == 1 &&
         initialization %in% c("anchor", "stm"))) {
     stop("initialization must be either \"anchor\" or \"stm\".")
+  }
+  logZ <- match.arg(logZ)
+  if (!(is.numeric(logZSpacing) && length(logZSpacing) == 1 && logZSpacing > 0))
+    stop("logZSpacing must be a single positive number.")
+  if (!(is.numeric(logZMargin) && length(logZMargin) == 1 && logZMargin >= 0))
+    stop("logZMargin must be a single non-negative number.")
+  if (!(is.logical(allow.neg.change) && length(allow.neg.change) == 1 &&
+        !is.na(allow.neg.change)))
+    stop("allow.neg.change must be TRUE or FALSE.")
+  if (!(is.numeric(patience) && length(patience) == 1 && patience >= 1))
+    stop("patience must be a single integer >= 1.")
+  patience <- as.integer(patience)
+  kappaSolver <- match.arg(kappaSolver)
+  estepOptimizer <- match.arg(estepOptimizer)
+  if (!(is.numeric(cores) && length(cores) == 1 && !is.na(cores) && cores >= 1))
+    stop("cores must be a single integer >= 1.")
+  cores <- as.integer(cores)
+  if (isTRUE(parallelize)) {
+    ## 1.6 started a PSOCK cluster on detectCores() - 1 workers and ran
+    ## foreach() with one task per document and per word; per-task overhead
+    ## dominated. 1.7 threads both steps in C++ instead.
+    warning("'parallelize' is deprecated; use 'cores' to set the number of ",
+            "threads. Using cores = parallel::detectCores() - 1.", call. = FALSE)
+    cores <- max(1L, parallel::detectCores() - 1L)
   }
   if(inherits(prevalence_sentiment,"formula")) {
     X <- model.matrix(prevalence_sentiment, data = corpus$meta)[,-1, drop = FALSE]
@@ -113,46 +231,16 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     X_seed <- initializationVar
   }
   
-  if (parallelize) {
-    # Register the parallel backend
-    cl <- parallel::makeCluster(parallel::detectCores() - 1)
-    doParallel::registerDoParallel(cl)
-    parallel::clusterExport(cl, varlist = c("lpbdcpp", "lgaecpp", "esthcpp"))
-    
-    # Function to handle each iteration of the loop
-    process_document <- function(d) {
-      cdv_ind <- corpus$documents[[d]][1,]
-      cdv <- corpus$documents[[d]][2,]
-      document <- corpus$documents[[d]]
-      
-      infer <- optim(par = alpha.est[d,], fn = lpbdcpp, gr = lgaecpp,
-                     method = "BFGS", control = list(fnscale = -1, maxit=500), hessian = FALSE,
-                     Sigma_Inv=Sigma_Inv.est,
-                     kappa_t=kappa.est$kappa_t, kappa_s=kappa.est$kappa_s, mu_d = mu$mu[,d], doc = document, V=V, mv = mv)
-      
-      hessian <- esthcpp(alpha_d = infer$par, kappa_t=kappa.est$kappa_t, kappa_s=kappa.est$kappa_s, Sigma_Inv = Sigma_Inv.est, doc = document, V=V, mv = mv)
-      h.chol <- tryCatch(expr = chol(hessian), error = function(x) return(NULL))
-      if (is.null(h.chol)) {
-        dvec <- diag(hessian)
-        magnitudes <- rowSums(abs(hessian)) - abs(dvec)
-        dvec <- mapply(max, dvec, magnitudes)
-        diag(hessian) <- dvec
-        h.chol <- chol(hessian)
-      }
-      sigma.ss <- chol2inv(h.chol)
-      elbo <- infer$value + 0.5*(sum(log(diag(h.chol))) - log(det(sigma)))
-      
-      # if(verbose && d%%ctevery==0) cat(".")
-      
-      list(sigma.ss = sigma.ss, elbo = elbo, infer = infer)
-    }
-    
-    
-    
-  }
+
 
   conv_criteria <- convTol
   topicreportevery <- 10
+  if (identical(kappaEstimation, "adjusted")) {
+    warning('kappaEstimation = "adjusted" was removed in sts 1.7; using "lasso".', call. = FALSE)
+    kappaEstimation <- "lasso"
+  }
+  if (!identical(kappaEstimation, "lasso"))
+    stop('kappaEstimation must be "lasso".', call. = FALSE)
   estimation = kappaEstimation
   nc_X <- ncol(X)
   D <- length(corpus$documents)
@@ -170,13 +258,13 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
   if (initialization == "anchor") {
     ## anchor words (spectral) initialization; see stmInit() in R/stmPort.R
     mod.out <- suppressWarnings(stmInit(corpus$documents, corpus$vocab, K, X = X,
-                                        max.em.its = 0))
+                                        max.em.its = 0, cores = cores))
   } else if (initialization == "stm") {
     ## stm initialization: fit an STM with initializationVar as the content
     ## covariate (internal implementation; the stm package is not required)
     if (is.null(stmSeed))
       mod.out <- suppressWarnings(stmInit(corpus$documents, corpus$vocab, K, X = X,
-                                          content = X_seed, max.em.its = 100))
+                                          content = X_seed, max.em.its = 100, cores = cores))
     else
       mod.out <- stmSeed
   }
@@ -224,7 +312,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
 
   ## estimate kappa 
   if (initialization == "anchor") {
-    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, c_d_bar = c_d_bar, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, phiD =phiD, parallelize = parallelize)
+    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, solver = kappaSolver, cores = cores)
     kappa.est$kappa_t[which(kappa.est$kappa_t == 0)] <- sign(rnorm(sum(kappa.est$kappa_t == 0)))*1e-4
     kappa.est$kappa_s[which(kappa.est$kappa_s == 0)] <- sign(rnorm(sum(kappa.est$kappa_s == 0)))*1e-4
   } else {
@@ -233,129 +321,94 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
   }
   
   elbo_vec <- achange_vec <- kchange_vec <- rep(NA, maxIter)
+  ## Bound decomposition per iteration: the data-fit term (sum over documents
+  ## of the log-posterior at its mode) and the Laplace term.  1.6 computed the
+  ## total only; keeping the parts makes a declining bound diagnosable.
+  elboObj_vec <- elboLap_vec <- rep(NA, maxIter)
+  trace_mu <- trace_kap <- matrix(NA_real_, maxIter, 3)
+  kappaLambda <- NULL
+  ## best-bound tracking and the consecutive-decrease counter (see the
+  ## convergence block below)
+  best_elbo  <- -Inf
+  best_iter  <- 1L
+  best_state <- NULL
+  n_decrease <- 0L
   ntokens <- sum(mod.out$settings$dim$wcounts$x)
   converge <- FALSE
   iter <- 1
+  ## ------------------- log-partition backend selection -------------------
+  ## Both backends cost O(V*K) per evaluation, so the trade-off is purely the
+  ## number of evaluations: the exact path sweeps V once per topic on every
+  ## objective evaluation (roughly 20 per document per E-step in practice),
+  ## while the table sweeps V once per topic per grid node and then
+  ## interpolates.  The table therefore pays off when 20*D comfortably
+  ## exceeds the node count, which is a statement about D alone -- V and K
+  ## cancel.  "auto" requires a 4x margin before switching.
+  alpha_s_rng <- range(alpha.est[, 1:K + K - 1])
+  logZnodes_est <- ceiling((diff(alpha_s_rng) + 2 * logZMargin) / logZSpacing) + 1
+  evals_est <- 20 * D
+  logZmode_num <- switch(logZ,
+    exact        = 0L,
+    interpolated = 1L,
+    auto         = if (evals_est > 4 * logZnodes_est) 1L else 0L)
+  if (verbose) {
+    if (logZmode_num == 1L) {
+      cat(sprintf("Log-partition: interpolated (h = %g, ~%d nodes; est. %dx fewer V-sweeps).\n",
+                  logZSpacing, logZnodes_est, round(evals_est / logZnodes_est)))
+    } else {
+      cat(sprintf("Log-partition: exact%s.\n",
+                  if (logZ == "auto") " (corpus too small for the table to pay off)" else ""))
+    }
+  }
+
   if (verbose) {cat("Done.\nStarting Estimation...\n")}
-  timer_full <- proc.time()[3]  
 
   while (iter <= maxIter & !converge) {
     t1 <- proc.time()[3]
     alpha.est.old <- alpha.est ## DEBUG
     kappa.est.old <- kappa.est ## DEBUG
-    sigma.ss <- diag(0, nrow=2*K-1)
-    phi <- vector("list", length = numGroups)
-    phiD <- matrix(0, nrow=D, ncol = K)
-    for (g in 1:numGroups) {
-      phi[[g]] <- matrix(data = 0, nrow = V, ncol = K)
-    }  
-    elbo <- 0      
-    BZ <- matrix(0, V, K)
-    ctevery <- ifelse(D>100, floor(D/100), 1)
-    
-    if (!parallelize) {
-      for (d in 1:D) {
-        ###################################################### THIS CODE CAN BE OPTIMIZED IN C++ ######################################################
-        cdv_ind <- corpus$documents[[d]][1,]
-        cdv <- corpus$documents[[d]][2,]
-        document <- corpus$documents[[d]]
-        # if (cpp) {
-          infer <- optim(par = alpha.est[d,], fn = lpbdcpp, gr = lgaecpp,
-                         method = "BFGS", control = list(fnscale = -1, maxit=500), hessian = FALSE,
-                         Sigma_Inv=Sigma_Inv.est,
-                         kappa_t=kappa.est$kappa_t, kappa_s=kappa.est$kappa_s, mu_d = mu$mu[,d], doc = document, V=V, mv = mv
-          )
-        # }
-        # else {
-        #   infer <- optim(par = alpha.est[d,], fn = log_posterior_byDoc.optim, gr = lapl_grad_alpha_eta.optim,
-        #                  method = "BFGS", control = list(fnscale = -1, maxit=500), hessian = FALSE,
-        #                  Gamma=Gamma.est, Sigma_Inv=Sigma_Inv.est,
-        #                  kappa=kappa.est, mu_d = mu$mu[,d], doc = document, V=V, mv = mv
-        #   )
-        # }
-        alpha.est[d,] <- infer$par
-        # if (cpp) {
-          hessian <- esthcpp(alpha_d = infer$par, kappa_t=kappa.est$kappa_t, kappa_s=kappa.est$kappa_s, Sigma_Inv = Sigma_Inv.est, doc = document, V=V, mv = mv)
-        # }
-        # else{
-          # hessian <- estimateHessian(alpha.d = infer$par, kappa = kappa.est, Sigma_Inv = Sigma_Inv.est, doc = document, V=V, mv = mv)
-        # }
-        h.chol <-  tryCatch(expr = chol(hessian), error = function(x) return(NULL))
-        if(is.null(h.chol)){
-          dvec <- diag(hessian)
-          magnitudes <- rowSums(abs(hessian)) - abs(dvec)
-          dvec <- mapply(max, dvec, magnitudes)
-          diag(hessian) <- dvec
-          h.chol <-  chol(hessian)
-        }
-        sigma.ss <- sigma.ss + chol2inv(h.chol)
-        elbo <- elbo + infer$value + 0.5*(sum(log(diag(h.chol))) - log(det(sigma)))
-        ###################################################### STOP ######################################################
-  
-        theta <- softmax(c(infer$par[1:(K-1)], 0))
-        for (k in 1:K) {
-          BZ[,k] <- theta[k]*softmax(mv + kappa.est$kappa_t[,k] + kappa.est$kappa_s[,k] * alpha.est[d,K+k-1])
-        }
-        BZ <- BZ / rowSums(BZ)
-        phi[[group[d]]][cdv_ind,] <- phi[[group[d]]][cdv_ind,] + cdv*BZ[cdv_ind,]
-        phiD[d,] <- phiD[d,] + colSums(cdv*BZ[cdv_ind,, drop = FALSE])
+    sigma.ss <- diag(0, nrow = 2*K-1)
+    elbo <- 0
 
-        if(verbose && d%%ctevery==0) cat(".")
-      }
-  
-      # print(summary(diff))
-      if(verbose) {
-        if(verbose) cat("\n") #add a line break for the next message.
-        msg <- sprintf("Completed E-Step (%d seconds). \n", floor((proc.time()-t1)[3]))
-        cat(msg)
-      }
-    } else {
-      if(verbose) {
-        cat("Starting E-step...")
-      }
-      
-      
-      
-      
-      # Use foreach for parallel processing
-      i = 1
-      results <- foreach(i = 1:D) %dopar% {
-        # dyn.load("STS")
-        process_document(i)
-      }
-      
-      
-      # Parallelize using mclapply
-      # results <- mclapply(1:D, process_document, mc.cores = detectCores() - 1)
-      
-      # Create a cluster using available cores
-      # cl <- makeCluster(detectCores() - 1)
-      # clusterExport(cl, varlist = c("out", "alpha.est", "lpbdcpp", "lgaecpp", "Sigma_Inv.est", "kappa.est", "mu", "V", "mv", "process_document", "esthcpp", "sigma"))
-      # results <- parLapply(cl, 1:D, process_document)
-      # stopCluster(cl)
-      
-      # Aggregate results
-      for (d in 1:D) {
-        sigma.ss <- sigma.ss + results[[d]]$sigma.ss
-        elbo <- elbo + results[[d]]$elbo
-        infer <- results[[d]]$infer
-        alpha.est[d,] <- infer$par
-        
-        cdv_ind <- corpus$documents[[d]][1,]
-        cdv <- corpus$documents[[d]][2,]
-        theta <- softmax(c(infer$par[1:(K-1)], 0))
-        for (k in 1:K) {
-          BZ[,k] <- theta[k] * softmax(mv + kappa.est$kappa_t[,k] + kappa.est$kappa_s[,k] * infer$par[K+k-1])
-        }
-        BZ <- BZ / rowSums(BZ)
-        phi[[group[d]]][cdv_ind,] <- phi[[group[d]]][cdv_ind,] + cdv * BZ[cdv_ind,]
-        phiD[d,] <- phiD[d,] + colSums(cdv*BZ[cdv_ind,, drop = FALSE])
-      }
-      if(verbose) {
-        # if(verbose) cat("\n") #add a line break for the next message.
-        msg <- sprintf("Completed E-Step (%d seconds). \n", floor((proc.time()-t1)[3]))
-        cat(msg)
-      }
+    ## ----------------------------- E-step -----------------------------
+    ## The entire per-document loop runs in C++ (src/estep.cpp): BFGS via a
+    ## port of R's vmmin, the Hessian, the Cholesky fix-up and the phi
+    ## accumulation.  Relative to 1.6 this forms only the document's own
+    ## rows, computes beta once for the objective and gradient instead of
+    ## twice, builds mv + kappa_t once per E-step instead of once per
+    ## objective call, and reuses beta_bar for phi (1.6 recomputed a full
+    ## V x K softmax in R for it).  All of these are algebraic
+    ## rearrangements: results match 1.6 up to floating-point
+    ## reassociation.
+    estep <- sts_estep_cpp(
+      documents    = corpus$documents,
+      alpha_init   = alpha.est,
+      kappa_t      = kappa.est$kappa_t,
+      kappa_s      = kappa.est$kappa_s,
+      mv           = mv,
+      mu           = mu$mu,
+      Sigma_Inv    = Sigma_Inv.est,
+      ## determinant(logarithm = TRUE) rather than 1.6's log(det(sigma)),
+      ## which underflows to -Inf for large K.
+      logdet_sigma = as.numeric(determinant(sigma, logarithm = TRUE)$modulus),
+      group        = as.integer(group),
+      numGroups    = as.integer(numGroups),
+      maxit        = 500L,
+      logZMode     = logZmode_num,
+      logZSpacing  = logZSpacing,
+      logZMargin   = logZMargin,
+      cores        = cores,
+      optimizer    = if (estepOptimizer == "newton") 1L else 0L)
+
+    alpha.est <- estep$alpha
+    sigma.ss  <- estep$sigma_ss
+    elbo      <- estep$elbo
+    phi       <- estep$phi
+    phiD      <- estep$phiD
+
+    if (verbose) {
+      cat(sprintf("Completed E-Step (%d seconds). \n",
+                  floor((proc.time() - t1)[3])))
     }
     t1 <- proc.time()
     
@@ -369,7 +422,29 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     sigma.chol <- chol(sigma)
     Sigma_Inv.est <- chol2inv(sigma.chol)
     
-    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, c_d_bar = c_d_bar, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, phiD =phiD, parallelize = parallelize)
+    ## Diagnostic trace (internal option sts.traceBound): the bound at fixed
+    ## alpha after each M-step update, so a decline can be attributed to the
+    ## mu/sigma update or to the kappa update. maxit = 0 evaluates without
+    ## re-optimising alpha.
+    traceB <- isTRUE(getOption("sts.traceBound", FALSE))
+    boundAt <- function(kap) {
+      r <- sts_estep_cpp(documents = corpus$documents, alpha_init = alpha.est,
+             kappa_t = kap$kappa_t, kappa_s = kap$kappa_s, mv = mv, mu = mu$mu,
+             Sigma_Inv = Sigma_Inv.est,
+             logdet_sigma = as.numeric(determinant(sigma, logarithm = TRUE)$modulus),
+             group = as.integer(group), numGroups = as.integer(numGroups),
+             maxit = 0L, logZMode = 0L, logZSpacing = logZSpacing,
+             logZMargin = logZMargin, cores = cores)
+      c(r$elbo, r$elboObj, r$elboLap)
+    }
+    if (traceB) trace_mu[iter, ] <- boundAt(kappa.est)
+
+    freezeAfter <- getOption("sts.kappaFreezeAfter", NULL)
+    lamFix <- if (!is.null(freezeAfter) && iter > freezeAfter) kappaLambda else NULL
+    kappa.est <- opt.kappa(phi = phi, alphaS = alpha.est[,1:K+K-1], kappa = kappa.est, estimation = estimation, numGroups = numGroups, group = group, V = V, mv = mv, solver = kappaSolver, cores = cores, lambda_fixed = lamFix)
+    if (is.null(lamFix)) kappaLambda <- attr(kappa.est, "lambda")
+
+    if (traceB) trace_kap[iter, ] <- boundAt(kappa.est)
     
     if(verbose) {
       #M-step message
@@ -382,6 +457,8 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
     }
     
     elbo_vec[iter] <- elbo
+    elboObj_vec[iter] <- estep$elboObj
+    elboLap_vec[iter] <- estep$elboLap
     if (iter == 1) {
       msg <- sprintf("Completing Iteration %i (approx. per word bound = %.3f) \n", 
                      iter, elbo/ntokens) 
@@ -392,7 +469,46 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
       new <- elbo_vec[iter]
       old <- elbo_vec[iter-1]
       delta <- (new - old)/(0.1 + abs(old))
-      converge <- ifelse(delta < conv_criteria, TRUE, FALSE)
+
+      ## Convergence rule.  Up to sts 1.6 this was `delta < conv_criteria`,
+      ## which treats ANY decrease in the ELBO as convergence, however large:
+      ## a dip of delta = -7e-5 against convTol = 1e-5 stopped the fit.  That
+      ## fired in 3 of 4 Gadarian test runs, so reported iteration counts and
+      ## final bounds from 1.6 and earlier partly reflect premature stops
+      ## rather than convergence.
+      ##
+      ## Simply allowing the fit to continue past a decrease is NOT the fix.
+      ## On the Gadarian data the bound rises to a single interior maximum and
+      ## then declines monotonically for as long as it is allowed to run: K=3
+      ## with kappaEstimation = "lasso" peaks at iteration 25 and then falls
+      ## for 35 consecutive iterations (-227 by iteration 60), and K=3 with
+      ## the since-removed "adjusted" estimator peaked at iteration 8 and
+      ## fell for 52 (-1554). (Both figures are with the half-step damping
+      ## that 1.7 removed.) So the
+      ## algorithm does not merely dip; past the peak it diverges, and 1.6's
+      ## rule was accidentally stopping one iteration past the best point.
+      ##
+      ## What is therefore fixed here is which iterate is RETURNED, not the
+      ## stopping test. The best-bound state is tracked and returned, so the
+      ## result can only improve on what the same stopping point gave before
+      ## (+2.09 and +4.40 on the two fits above). Stopping still happens on a
+      ## sustained decrease, after `patience` consecutive decreasing
+      ## iterations, which keeps the fit out of the declining region.
+      ##
+      ## allow.neg.change = TRUE restores 1.6 exactly: stop on the first
+      ## decrease and return the last iterate, not the best one.
+      if (delta < 0) n_decrease <- n_decrease + 1L else n_decrease <- 0L
+      if (delta < 0 && abs(delta) > conv_criteria && !allow.neg.change) {
+        warning(sprintf(paste0("The ELBO decreased at iteration %d ",
+                               "(relative change %.3e). The best iterate so ",
+                               "far (iteration %d) will be returned."),
+                        iter, delta, which.max(elbo_vec[1:iter])), call. = FALSE)
+      }
+      converge <- if (allow.neg.change) {
+        delta < conv_criteria
+      } else {
+        abs(delta) < conv_criteria || n_decrease >= patience
+      }
       
       achange <- mean(abs(alpha.est - alpha.est.old)/(0.1 + abs(alpha.est.old)))
       kchange <- mean(abs(c(kappa.est$kappa_t, kappa.est$kappa_s) - c(kappa.est.old$kappa_t, kappa.est.old$kappa_s))/(0.1 + abs(c(kappa.est.old$kappa_t, kappa.est.old$kappa_s))))
@@ -406,17 +522,74 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
         cat(msg)
       }
       if (verbose && iter %% topicreportevery==0) {
-        printTopWords(list(alpha = alpha.est, kappa = kappa.est, sigma = sigma, mv = mv, vocab = mod.out$vocab))
-      }        
-    }     
+        ## printTopWords() validates its input (1.7), so give the current
+        ## estimates the class of a fitted model
+        printTopWords(structure(list(alpha = alpha.est, kappa = kappa.est, sigma = sigma,
+                                     mv = mv, vocab = mod.out$vocab), class = "STS"))
+      }
+    }
+
+    ## Snapshot the best-bound state.  Taken here, after the M-step, so the
+    ## snapshot is exactly what the function would have returned had it
+    ## stopped at this iteration -- the same point in the cycle 1.6 returns
+    ## from, just possibly a different iteration.
+    if (!allow.neg.change && elbo > best_elbo) {
+      best_elbo <- elbo
+      best_iter <- iter
+      best_state <- list(alpha = alpha.est, gamma = Gamma.est,
+                         kappa = kappa.est, sigma_inv = Sigma_Inv.est,
+                         sigma = sigma, mu = mu$mu)
+    }
     iter <- iter + 1
   }
 
-  final.est <- list(alpha = alpha.est, gamma = Gamma.est, kappa = kappa.est, sigma_inv = Sigma_Inv.est, sigma = sigma, elbo = elbo_vec[1:(iter-1)], mv = mv, runtime = proc.time()[3] - timer_full, vocab = mod.out$vocab, mu = mu$mu)
-  if (parallelize) {
-    # Stop the cluster when done
-    parallel::stopCluster(cl)
+  elbo_path <- elbo_vec[1:(iter-1)]
+  if (!converge) {
+    n <- length(elbo_path)
+    last_change <- if (n >= 2) (elbo_path[n] - elbo_path[n - 1]) / (0.1 + abs(elbo_path[n - 1])) else NA_real_
+    warning(sprintf(paste0("sts() stopped at maxIter = %d before converging ",
+                           "(last relative change in the bound %.3e; convTol = %g). ",
+                           "Consider a larger maxIter."),
+                    maxIter, last_change, convTol), call. = FALSE)
   }
+  if (!allow.neg.change && !is.null(best_state) && best_iter < (iter - 1)) {
+    if (verbose) {
+      cat(sprintf(paste0("Returning the best iterate (%d of %d; bound %.4f ",
+                         "vs %.4f at the last iteration).\n"),
+                  best_iter, iter - 1, best_elbo, elbo_vec[iter - 1]))
+    }
+    alpha.est     <- best_state$alpha
+    Gamma.est     <- best_state$gamma
+    kappa.est     <- best_state$kappa
+    Sigma_Inv.est <- best_state$sigma_inv
+    sigma         <- best_state$sigma
+    mu$mu         <- best_state$mu
+  }
+
+  ## label the prevalence/sentiment regression coefficients (1.7)
+  dimnames(Gamma.est) <- list(c("(Intercept)", if (is.null(colnames(X))) paste0("X", seq_len(ncol(X))) else colnames(X)),
+                              c(sprintf("Topic %d prevalence", seq_len(K - 1)), sprintf("Topic %d sentiment", seq_len(K))))
+  final.est <- list(alpha = alpha.est, gamma = Gamma.est, kappa = kappa.est, sigma_inv = Sigma_Inv.est, sigma = sigma, elbo = elbo_path, mv = mv, runtime = proc.time()[3] - timer_full, vocab = mod.out$vocab, mu = mu$mu)
+  final.est$converged <- converge
+  ## Per-iteration diagnostics (new in 1.7): the bound's two components and
+  ## the mean relative change in alpha and kappa.
+  final.est$diagnostics <- data.frame(
+    iter    = seq_len(iter - 1),
+    elbo    = elbo_path,
+    elboObj = elboObj_vec[1:(iter - 1)],
+    elboLap = elboLap_vec[1:(iter - 1)],
+    achange = achange_vec[1:(iter - 1)],
+    kchange = kchange_vec[1:(iter - 1)])
+  if (isTRUE(getOption("sts.traceBound", FALSE))) {
+    final.est$boundTrace <- data.frame(
+      iter = seq_len(iter - 1),
+      afterE = elbo_path,
+      afterMuSigma = trace_mu[1:(iter - 1), 1], afterKappa = trace_kap[1:(iter - 1), 1],
+      objAfterMuSigma = trace_mu[1:(iter - 1), 2], objAfterKappa = trace_kap[1:(iter - 1), 2],
+      lapAfterMuSigma = trace_mu[1:(iter - 1), 3], lapAfterKappa = trace_kap[1:(iter - 1), 3])
+  }
+  final.est$bestIter <- if (allow.neg.change) length(elbo_path) else best_iter
+  final.est$call <- call
   class(final.est) <- "STS"
 
   return(final.est)

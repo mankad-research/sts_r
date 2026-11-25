@@ -79,6 +79,19 @@ test_that("a fit that stops at maxIter warns and is marked unconverged", {
   expect_lt(length(g$elbo), 60)
 })
 
+test_that("verbose fits print top words every 10 iterations", {
+  ## sts 1.7 before this fix stopped with an error at iteration 10 when
+  ## verbose = TRUE (the default): the interim printTopWords() call was
+  ## given a plain list, which its input check rejects.
+  cp <- gad_corpus(); set.seed(11)
+  out <- capture.output(f <- suppressWarnings(
+    sts(~ treatment * pid_rep, ~ noTreatment, cp, K = 3, maxIter = 10, patience = 100L)))
+  expect_s3_class(f, "STS")
+  expect_length(f$elbo, 10)
+  expect_true(any(grepl("Completing Iteration 10", out)))
+  expect_true(any(grepl("^Topic 1 Avg sentiment-discourse:", out)))
+})
+
 test_that("argument handling", {
   cp <- gad_corpus()
   ## maxIter = 1 also triggers the stopped-at-maxIter warning; muffle only that

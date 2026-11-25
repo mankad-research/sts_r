@@ -522,7 +522,10 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
         cat(msg)
       }
       if (verbose && iter %% topicreportevery==0) {
-        printTopWords(list(alpha = alpha.est, kappa = kappa.est, sigma = sigma, mv = mv, vocab = mod.out$vocab))
+        ## printTopWords() validates its input (1.7), so give the current
+        ## estimates the class of a fitted model
+        printTopWords(structure(list(alpha = alpha.est, kappa = kappa.est, sigma = sigma,
+                                     mv = mv, vocab = mod.out$vocab), class = "STS"))
       }
     }
 

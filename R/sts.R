@@ -29,7 +29,9 @@
 #' the stm package). 
 #' @param K A positive integer (of size 2 or greater) representing
 #' the desired number of topics. 
-#' @param maxIter A positive integer representing the max number of VEM iterations allowed.
+#' @param maxIter Maximum number of variational EM iterations; default 500 (100
+#' before sts 1.7). \code{sts()} warns if it stops here before converging, and
+#' the fit's \code{converged} component records whether it converged.
 #' @param convTol Convergence tolerance for the variational EM estimation algorithm; Default value = 1e-5.
 #' @param initialization Character argument that allows the user to specify an initialization
 #' method. The default choice, \code{"anchor"} to initialize prevalence according to anchor words and 
@@ -96,12 +98,14 @@
 #' are not reproduced exactly in any case: 1.7 also changed the kappa update;
 #' see \code{kappaEstimation}.)
 #' @param patience Number of consecutive iterations with a decreasing ELBO
-#' tolerated before stopping, when \code{allow.neg.change = FALSE}; default 1.
-#' Note that the bound is not guaranteed to increase monotonically for this
-#' model, because the AIC step re-selects the lasso penalty at every iteration:
-#' on the Gadarian data some fits rise monotonically to convergence while others
-#' reach an interior maximum and then decline, so large values of
-#' \code{patience} mostly cost time without improving the returned fit.
+#' tolerated before stopping, when \code{allow.neg.change = FALSE}; default 5.
+#' The bound is not guaranteed to increase monotonically for this model,
+#' because the AIC step re-selects the lasso penalty at every iteration, and it
+#' can dip for an iteration or two and then rise again. The iterate with the
+#' highest bound is returned whatever the value, so a larger \code{patience}
+#' can only find a later, higher maximum; the cost is up to \code{patience}
+#' iterations past the one returned. With \code{patience = 1}, a fit on the
+#' Gadarian data stopped at iteration 2 on such a dip.
 #' @param kappaSolver Solver for the kappa M-step. \code{"cpp"} (default) uses
 #' a dedicated Poisson-lasso solver that exploits the separable structure of the
 #' aggregated design (one two-coefficient problem per topic, sharing the lambda
@@ -142,6 +146,8 @@
 #' \item{sigma_inv}{Inverse of the covariance matrix for the alpha parameters}
 #' \item{sigma}{Covariance matrix for the alpha parameters} 
 #' \item{elbo}{the ELBO at each iteration of the estimation algorithm}
+#' \item{converged}{\code{TRUE} if the fit converged, \code{FALSE} if it
+#' stopped at \code{maxIter}}
 #' \item{mv}{the baseline log-transformed occurrence rate of each word in the corpus}
 #' \item{runtime}{Time elapsed in seconds, including initialization (sts 1.6
 #' and earlier excluded it)} 
@@ -181,7 +187,7 @@
 #' ## low max iteration number just for testing
 #' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 1, verbose = FALSE)
 #' @export
-sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2, allow.neg.change = FALSE, patience = 1L, kappaSolver = c("cpp", "glmnet"), cores = getOption("sts.cores", 1L), estepOptimizer = c("bfgs", "newton")) {
+sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2, allow.neg.change = FALSE, patience = 5L, kappaSolver = c("cpp", "glmnet"), cores = getOption("sts.cores", 1L), estepOptimizer = c("bfgs", "newton")) {
   call <- match.call()
   timer_full <- proc.time()[3]
 
@@ -535,6 +541,14 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
   }
 
   elbo_path <- elbo_vec[1:(iter-1)]
+  if (!converge) {
+    n <- length(elbo_path)
+    last_change <- if (n >= 2) (elbo_path[n] - elbo_path[n - 1]) / (0.1 + abs(elbo_path[n - 1])) else NA_real_
+    warning(sprintf(paste0("sts() stopped at maxIter = %d before converging ",
+                           "(last relative change in the bound %.3e; convTol = %g). ",
+                           "Consider a larger maxIter."),
+                    maxIter, last_change, convTol), call. = FALSE)
+  }
   if (!allow.neg.change && !is.null(best_state) && best_iter < (iter - 1)) {
     if (verbose) {
       cat(sprintf(paste0("Returning the best iterate (%d of %d; bound %.4f ",
@@ -553,6 +567,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 100
   dimnames(Gamma.est) <- list(c("(Intercept)", if (is.null(colnames(X))) paste0("X", seq_len(ncol(X))) else colnames(X)),
                               c(sprintf("Topic %d prevalence", seq_len(K - 1)), sprintf("Topic %d sentiment", seq_len(K))))
   final.est <- list(alpha = alpha.est, gamma = Gamma.est, kappa = kappa.est, sigma_inv = Sigma_Inv.est, sigma = sigma, elbo = elbo_path, mv = mv, runtime = proc.time()[3] - timer_full, vocab = mod.out$vocab, mu = mu$mu)
+  final.est$converged <- converge
   ## Per-iteration diagnostics (new in 1.7): the bound's two components and
   ## the mean relative change in alpha and kappa.
   final.est$diagnostics <- data.frame(

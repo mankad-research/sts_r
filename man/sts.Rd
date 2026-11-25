@@ -9,7 +9,7 @@ sts(
   initializationVar,
   corpus,
   K,
-  maxIter = 100,
+  maxIter = 500,
   convTol = 1e-05,
   initialization = "anchor",
   kappaEstimation = "lasso",
@@ -20,7 +20,7 @@ sts(
   logZSpacing = 0.01,
   logZMargin = 2,
   allow.neg.change = FALSE,
-  patience = 1L,
+  patience = 5L,
   kappaSolver = c("cpp", "glmnet"),
   cores = getOption("sts.cores", 1L),
   estepOptimizer = c("bfgs", "newton")
@@ -46,7 +46,9 @@ the stm package).}
 \item{K}{A positive integer (of size 2 or greater) representing
 the desired number of topics.}
 
-\item{maxIter}{A positive integer representing the max number of VEM iterations allowed.}
+\item{maxIter}{Maximum number of variational EM iterations; default 500 (100
+before sts 1.7). \code{sts()} warns if it stops here before converging, and
+the fit's \code{converged} component records whether it converged.}
 
 \item{convTol}{Convergence tolerance for the variational EM estimation algorithm; Default value = 1e-5.}
 
@@ -124,12 +126,14 @@ are not reproduced exactly in any case: 1.7 also changed the kappa update;
 see \code{kappaEstimation}.)}
 
 \item{patience}{Number of consecutive iterations with a decreasing ELBO
-tolerated before stopping, when \code{allow.neg.change = FALSE}; default 1.
-Note that the bound is not guaranteed to increase monotonically for this
-model, because the AIC step re-selects the lasso penalty at every iteration:
-on the Gadarian data some fits rise monotonically to convergence while others
-reach an interior maximum and then decline, so large values of
-\code{patience} mostly cost time without improving the returned fit.}
+tolerated before stopping, when \code{allow.neg.change = FALSE}; default 5.
+The bound is not guaranteed to increase monotonically for this model,
+because the AIC step re-selects the lasso penalty at every iteration, and it
+can dip for an iteration or two and then rise again. The iterate with the
+highest bound is returned whatever the value, so a larger \code{patience}
+can only find a later, higher maximum; the cost is up to \code{patience}
+iterations past the one returned. With \code{patience = 1}, a fit on the
+Gadarian data stopped at iteration 2 on such a dip.}
 
 \item{kappaSolver}{Solver for the kappa M-step. \code{"cpp"} (default) uses
 a dedicated Poisson-lasso solver that exploits the separable structure of the
@@ -175,6 +179,8 @@ account for the uncertainty in the document-level variables, use
 \item{sigma_inv}{Inverse of the covariance matrix for the alpha parameters}
 \item{sigma}{Covariance matrix for the alpha parameters}
 \item{elbo}{the ELBO at each iteration of the estimation algorithm}
+\item{converged}{\code{TRUE} if the fit converged, \code{FALSE} if it
+stopped at \code{maxIter}}
 \item{mv}{the baseline log-transformed occurrence rate of each word in the corpus}
 \item{runtime}{Time elapsed in seconds, including initialization (sts 1.6
 and earlier excluded it)}

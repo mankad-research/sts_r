@@ -65,11 +65,29 @@ test_that("the best iterate is returned and stopping follows allow.neg.change", 
   expect_true(all(head(d, -1) >= 0))
 })
 
+test_that("a fit that stops at maxIter warns and is marked unconverged", {
+  cp <- gad_corpus(); set.seed(11)
+  w <- character()
+  f <- withCallingHandlers(
+    sts(~ treatment * pid_rep, ~ noTreatment, cp, K = 3, maxIter = 3, verbose = FALSE),
+    warning = function(cnd) { w <<- c(w, conditionMessage(cnd)); invokeRestart("muffleWarning") })
+  expect_true(any(grepl("stopped at maxIter = 3 before converging", w)))
+  expect_false(f$converged)
+  expect_output(print(f), "did not converge")
+  g <- fit_gad(maxIter = 60, convTol = 1e-2)
+  expect_true(g$converged)
+  expect_lt(length(g$elbo), 60)
+})
+
 test_that("argument handling", {
   cp <- gad_corpus()
+  ## maxIter = 1 also triggers the stopped-at-maxIter warning; muffle only that
   expect_warning(
-    sts(~ treatment, ~ noTreatment, cp, K = 3, maxIter = 1, verbose = FALSE,
-        kappaEstimation = "adjusted"),
+    withCallingHandlers(
+      sts(~ treatment, ~ noTreatment, cp, K = 3, maxIter = 1, verbose = FALSE,
+          kappaEstimation = "adjusted"),
+      warning = function(cnd) if (grepl("stopped at maxIter", conditionMessage(cnd)))
+        invokeRestart("muffleWarning")),
     "removed in sts 1.7")
   expect_error(
     sts(~ treatment, ~ noTreatment, cp, K = 3, maxIter = 1, verbose = FALSE,

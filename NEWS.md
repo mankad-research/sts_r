@@ -41,11 +41,20 @@ about 517 s in sts 1.6 (96x and 181x).
   ELBO and returned the last iterate. The bound is not monotone for this model
   (the lasso penalty is re-selected by AIC at every iteration), so that rule
   often stopped early, one iteration past the best point. sts 1.7 returns the
-  iterate with the highest bound and stops after `patience` (default 1)
+  iterate with the highest bound and stops after `patience` (default 5)
   consecutive decreases or when the relative change falls below `convTol`.
   `allow.neg.change = TRUE` restores the old stopping rule. New components
   `bestIter` and `diagnostics` (the bound's data-fit and Laplace terms and the
   changes in alpha and kappa at each iteration).
+* **Defaults `maxIter = 500` (was 100) and `patience = 5` (was 1).** With the
+  faster estimation, fits can run to convergence: on the Gadarian corpus 8 of
+  9 fits converged within 351 iterations, while at 100 iterations only 1 had.
+  Held-out likelihood was essentially unchanged (the extra iterations mainly
+  raise the bound), but the estimates are those of a converged fit rather than
+  of wherever the cap fell. `sts()` now warns when it stops at `maxIter`, and
+  the fit has a `converged` component. With `patience = 1`, a single dip in the
+  (non-monotone) bound could end a fit early; one Gadarian fit stopped at
+  iteration 2.
 * **Kappa update.** sts 1.1 to 1.6 replaced kappa by the average of the new
   estimate and the previous one at each M-step. This half-step is not part of
   the method of Chen and Mankad (2025) and meant the M-step did not maximize

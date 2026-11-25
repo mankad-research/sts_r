@@ -28,6 +28,8 @@ print.STS <- function(x,...) {
     best <- if (is.null(x$bestIter)) length(x$elbo) else x$bestIter
     cat(sprintf("Fitted in %d iterations; the estimates are from iteration %d (approximate ELBO %.6g).\n",
                 length(x$elbo), best, x$elbo[best]))
+    if (isFALSE(x$converged))
+      cat("The fit did not converge: it stopped at maxIter.\n")
   }
   invisible(x)
 }

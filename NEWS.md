@@ -1,8 +1,9 @@
 # sts 1.7
 
-Version 1.7 makes estimation much faster, changes the kappa update, and fixes
-the prevalence tables of `estimateRegns()`. Results differ from sts 1.6; see
-"Changes that affect results" below.
+Version 1.7 makes estimation much faster; changes the kappa update, the
+anchor-word initialization and the stopping defaults; and fixes the prevalence
+tables of `estimateRegns()`. Results differ from sts 1.6; see "Changes that
+affect results" below.
 
 ## Speed
 

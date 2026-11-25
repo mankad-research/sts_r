@@ -93,7 +93,7 @@ about 517 s in sts 1.6 (96x and 181x).
 
 To reproduce an sts 1.6 fit (up to floating-point reassociation, and on the
 same platform), use `kappaSolver = "glmnet"`, `logZ = "exact"`,
-`allow.neg.change = TRUE` and
+`allow.neg.change = TRUE`, `maxIter = 100` and
 `options(sts.kappaDamping = 0.5, sts.recoverL2 = "expgrad")`.
 
 ## Removed and deprecated

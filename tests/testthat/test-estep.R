@@ -64,10 +64,13 @@ test_that("the bound is the Laplace ELBO of Chen and Mankad (2025), Proposition 
   expect_identical(r16$sigma_ss, r$sigma_ss)
 })
 
-test_that("the (mu, Sigma) update never lowers the bound", {
-  ## It maximizes the bound given the E-step's means and covariances, and
-  ## re-evaluating the Laplace covariance at fixed alpha can only raise it.
-  ## (The term used before 1.7.1 fell in this step on most runs.)
+test_that("the (mu, Sigma) update does not lower the bound on Gadarian", {
+  ## The Sigma update maximizes the bound given the E-step's means and
+  ## covariances, and re-evaluating the Laplace covariance at fixed alpha can
+  ## only raise it. The Gamma update is stm's variational linear regression,
+  ## which shrinks the coefficients slightly, so for the joint update this is
+  ## an observed property, not a guarantee. (The term used before 1.7.1 fell
+  ## in this step on most runs.)
   cp <- gad_corpus(); set.seed(2024)
   old <- options(sts.traceBound = TRUE); on.exit(options(old))
   f <- suppressWarnings(sts(~ treatment * pid_rep, ~ noTreatment, cp, K = 3, maxIter = 15,

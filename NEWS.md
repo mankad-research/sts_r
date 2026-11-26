@@ -1,3 +1,30 @@
+# sts 1.7.1
+
+## Bug fix: the reported bound
+
+* The bound reported in `elbo` (and used by the stopping rule and to choose
+  the returned iterate) now matches the approximate ELBO of Chen and Mankad
+  (2025, Management Science, Proposition 1): for each document,
+  f(alpha_d) - (1/2) log det(-H_d) - (1/2) log det(Sigma), where H_d is the
+  Hessian of the document objective at its mode. Every earlier release, and
+  the paper's replication code, used f(alpha_d) + (1/4) log det(-H_d) -
+  (1/2) log det(Sigma): the wrong sign and half the weight on the
+  log-determinant. That quantity is not the Laplace approximation of the
+  ELBO: it grows without limit as Sigma shrinks, and it can fall in the
+  (Gamma, Sigma) update, which the Proposition 1 bound cannot.
+* The estimates at any given iteration are unchanged, but the reported
+  values, the iteration at which a fit stops and the iterate it returns can
+  differ from 1.7.0. On the Yelp example of the package paper (K = 10, one
+  held-out split), 1.7.0 stopped at iteration 41 and returned iteration 36;
+  1.7.1 stops at iteration 30 and returns iteration 28, with the same
+  held-out likelihood to three decimals. `diagnostics$elboLap` is the new
+  Laplace term.
+* Internal option `options(sts.bound = "1.6")` restores the old term, for
+  reproducing earlier fits. To reproduce an sts 1.6 fit, use
+  `kappaSolver = "glmnet"`, `logZ = "exact"`, `allow.neg.change = TRUE`,
+  `maxIter = 100` and
+  `options(sts.kappaDamping = 0.5, sts.recoverL2 = "expgrad", sts.bound = "1.6")`.
+
 # sts 1.7
 
 Version 1.7 makes estimation much faster; changes the kappa update, the

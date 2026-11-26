@@ -178,7 +178,11 @@ account for the uncertainty in the document-level variables, use
 \item{kappa}{Estimated kappa coefficients that determine sentiment-discourse and the topic-word distributions}
 \item{sigma_inv}{Inverse of the covariance matrix for the alpha parameters}
 \item{sigma}{Covariance matrix for the alpha parameters}
-\item{elbo}{the ELBO at each iteration of the estimation algorithm}
+\item{elbo}{the approximate ELBO at each iteration of the estimation
+algorithm: the Laplace variational bound of Chen and Mankad (2025),
+Proposition 1, summed over documents. sts 1.0 to 1.7.0 reported a different
+quantity, whose Laplace term had the wrong sign and half the weight on the
+log-determinant of the negative Hessian; see NEWS for 1.7.1.}
 \item{converged}{\code{TRUE} if the fit converged, \code{FALSE} if it
 stopped at \code{maxIter}}
 \item{mv}{the baseline log-transformed occurrence rate of each word in the corpus}
@@ -189,7 +193,8 @@ and earlier excluded it)}
 Gamma for each document}
 \item{diagnostics}{A data frame with one row per iteration: the bound
 (\code{elbo}), its data-fit and Laplace terms (\code{elboObj},
-\code{elboLap}), and the mean relative changes in alpha and kappa
+\code{elboLap}, where the Laplace term is
+\eqn{-\frac{1}{2}\log\det(-H_d)-\frac{1}{2}\log\det\Sigma}{-(1/2) log det(-H_d) - (1/2) log det(Sigma)} summed over documents), and the mean relative changes in alpha and kappa
 (\code{achange}, \code{kchange}). New in sts 1.7.}
 \item{bestIter}{The iteration whose estimates are returned (see
 \code{allow.neg.change}). New in sts 1.7.}

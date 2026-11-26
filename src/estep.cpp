@@ -320,7 +320,7 @@ namespace {
 
 struct BlockOut {
   arma::mat sigma_ss;
-  double elbo = 0.0, elbo_obj = 0.0, elbo_lap = 0.0;
+  double elbo = 0.0, elbo_obj = 0.0, elbo_lap = 0.0, half_logdet = 0.0;
   long fncount = 0, grcount = 0, nfail = 0, ncholfix = 0, nnewtonfallback = 0;
   std::string err;
 };
@@ -335,6 +335,7 @@ struct EstepWorker : public RcppParallel::Worker {
   const arma::mat& mu;
   const arma::mat& Sigma_Inv;
   const double logdet_sigma;
+  const int boundForm;            // 0 = Chen & Mankad (2025) Prop. 1; 1 = sts 1.0-1.7.0
   const int maxit;
   const int optimizer;            // 0 = BFGS (vmmin port, as 1.6), 1 = Newton
   const std::vector<arma::uword>& block_start;
@@ -347,11 +348,12 @@ struct EstepWorker : public RcppParallel::Worker {
   EstepWorker(const std::vector<arma::uvec>& ind_, const std::vector<arma::vec>& cnt_,
               const Normalizer& nrm_, const arma::mat& lin_base_, const arma::mat& kappa_s_,
               const arma::mat& mu_, const arma::mat& Sigma_Inv_, double logdet_sigma_,
-              int maxit_, int optimizer_, const std::vector<arma::uword>& block_start_,
+              int boundForm_, int maxit_, int optimizer_, const std::vector<arma::uword>& block_start_,
               arma::mat& alpha_, arma::mat& phiD_, arma::mat& lZ_opt_,
               std::vector<BlockOut>& out_, arma::uword P_)
     : ind(ind_), cnt(cnt_), nrm(nrm_), lin_base(lin_base_), kappa_s(kappa_s_),
-      mu(mu_), Sigma_Inv(Sigma_Inv_), logdet_sigma(logdet_sigma_), maxit(maxit_),
+      mu(mu_), Sigma_Inv(Sigma_Inv_), logdet_sigma(logdet_sigma_), boundForm(boundForm_),
+      maxit(maxit_),
       optimizer(optimizer_),
       block_start(block_start_), alpha(alpha_), phiD(phiD_), lZ_opt(lZ_opt_),
       out(out_), P(P_) {}
@@ -402,10 +404,24 @@ struct EstepWorker : public RcppParallel::Worker {
           if (!arma::inv(Ri, arma::trimatu(R)))
             throw std::runtime_error("inverse of the Cholesky factor failed");
           bo.sigma_ss += Ri * Ri.t();                        // == chol2inv(R)
-          const double lap = 0.5 * (arma::accu(arma::log(R.diag())) - logdet_sigma);
-          bo.elbo     += prob.objective() + lap;
-          bo.elbo_obj += prob.objective();
-          bo.elbo_lap += lap;
+          // Laplace term of the bound.  R is the Cholesky factor of the
+          // negative Hessian -H_d, so hl = sum(log diag R) = (1/2) log det(-H_d)
+          // = -(1/2) log det(Upsilon_d) with Upsilon_d = (-H_d)^{-1}.
+          // Chen & Mankad (2025), Proposition 1:
+          //   ELBO_d = f(alpha_d) + (1/2)(log det Upsilon_d - log det Sigma)
+          //          = f(alpha_d) - hl - (1/2) log det Sigma.
+          // sts 1.0-1.7.0 (and the MS replication code) used
+          //   (1/2)(hl - log det Sigma),
+          // which has the wrong sign and half the weight on log det(-H_d) and
+          // grows without bound as Sigma shrinks; boundForm = 1 keeps it for
+          // reproducing those releases.
+          const double hl  = arma::accu(arma::log(R.diag()));
+          const double lap = (boundForm == 1) ? 0.5 * (hl - logdet_sigma)
+                                              : -hl - 0.5 * logdet_sigma;
+          bo.elbo        += prob.objective() + lap;
+          bo.elbo_obj    += prob.objective();
+          bo.elbo_lap    += lap;
+          bo.half_logdet += hl;
 
           // phiD reuses beta_bar; phi is built in the word pass below.
           arma::mat contrib = prob.beta_bar();
@@ -483,7 +499,8 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
                          double logZSpacing,
                          double logZMargin,
                          int cores = 1,
-                         int optimizer = 0) {
+                         int optimizer = 0,
+                         int boundForm = 0) {
   const arma::uword D = documents.size();
   const arma::uword V = mv.n_elem;
   const arma::uword K = kappa_t.n_cols;
@@ -534,17 +551,19 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
   arma::mat lZ_opt(D, K, arma::fill::zeros);
   std::vector<BlockOut> out(nb);
 
+  if (boundForm != 0 && boundForm != 1) Rcpp::stop("boundForm must be 0 or 1");
   EstepWorker ew(ind, cnt, nrm, lin_base, kappa_s, mu, Sigma_Inv, logdet_sigma,
-                 maxit, optimizer, block_start, alpha, phiD, lZ_opt, out, P);
+                 boundForm, maxit, optimizer, block_start, alpha, phiD, lZ_opt, out, P);
   RcppParallel::parallelFor(0, nb, ew, 1, cores);
 
   arma::mat sigma_ss(P, P, arma::fill::zeros);
-  double elbo = 0.0, elbo_obj = 0.0, elbo_lap = 0.0;
+  double elbo = 0.0, elbo_obj = 0.0, elbo_lap = 0.0, half_logdet = 0.0;
   long fncount = 0, grcount = 0, nfail = 0, ncholfix = 0, nfallback = 0;
   for (arma::uword b = 0; b < nb; ++b) {                    // fixed order
     if (!out[b].err.empty()) Rcpp::stop("E-step: " + out[b].err);
     sigma_ss += out[b].sigma_ss;
     elbo += out[b].elbo; elbo_obj += out[b].elbo_obj; elbo_lap += out[b].elbo_lap;
+    half_logdet += out[b].half_logdet;
     fncount += out[b].fncount; grcount += out[b].grcount;
     nfail += out[b].nfail; ncholfix += out[b].ncholfix; nfallback += out[b].nnewtonfallback;
   }
@@ -574,6 +593,7 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
     Rcpp::Named("elbo")     = elbo,
     Rcpp::Named("elboObj")  = elbo_obj,
     Rcpp::Named("elboLap")  = elbo_lap,
+    Rcpp::Named("halfLogdetNegH") = half_logdet,
     Rcpp::Named("sigma_ss") = sigma_ss,
     Rcpp::Named("phi")      = phi_out,
     Rcpp::Named("phiD")     = phiD,

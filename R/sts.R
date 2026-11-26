@@ -145,7 +145,11 @@
 #' \item{kappa}{Estimated kappa coefficients that determine sentiment-discourse and the topic-word distributions} 
 #' \item{sigma_inv}{Inverse of the covariance matrix for the alpha parameters}
 #' \item{sigma}{Covariance matrix for the alpha parameters} 
-#' \item{elbo}{the ELBO at each iteration of the estimation algorithm}
+#' \item{elbo}{the approximate ELBO at each iteration of the estimation
+#' algorithm: the Laplace variational bound of Chen and Mankad (2025),
+#' Proposition 1, summed over documents. sts 1.0 to 1.7.0 reported a different
+#' quantity, whose Laplace term had the wrong sign and half the weight on the
+#' log-determinant of the negative Hessian; see NEWS for 1.7.1.}
 #' \item{converged}{\code{TRUE} if the fit converged, \code{FALSE} if it
 #' stopped at \code{maxIter}}
 #' \item{mv}{the baseline log-transformed occurrence rate of each word in the corpus}
@@ -156,7 +160,8 @@
 #' Gamma for each document}
 #' \item{diagnostics}{A data frame with one row per iteration: the bound
 #' (\code{elbo}), its data-fit and Laplace terms (\code{elboObj},
-#' \code{elboLap}), and the mean relative changes in alpha and kappa
+#' \code{elboLap}, where the Laplace term is
+#' \eqn{-\frac{1}{2}\log\det(-H_d)-\frac{1}{2}\log\det\Sigma}{-(1/2) log det(-H_d) - (1/2) log det(Sigma)} summed over documents), and the mean relative changes in alpha and kappa
 #' (\code{achange}, \code{kchange}). New in sts 1.7.}
 #' \item{bestIter}{The iteration whose estimates are returned (see
 #' \code{allow.neg.change}). New in sts 1.7.}
@@ -209,6 +214,16 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
   patience <- as.integer(patience)
   kappaSolver <- match.arg(kappaSolver)
   estepOptimizer <- match.arg(estepOptimizer)
+  ## Laplace term of the bound.  The default is the bound of Chen and Mankad
+  ## (2025), Proposition 1.  Internal option sts.bound = "1.6" restores the
+  ## term used by sts 1.0-1.7.0 (wrong sign and half the weight on
+  ## log det(-H)); it changes the reported bound and therefore the stopping
+  ## point and the returned iterate, and is needed only to reproduce those
+  ## releases.
+  boundOpt <- getOption("sts.bound", "laplace")
+  if (!is.character(boundOpt) || length(boundOpt) != 1L || !boundOpt %in% c("laplace", "1.6"))
+    stop("option sts.bound must be \"laplace\" (default) or \"1.6\"", call. = FALSE)
+  boundForm <- if (identical(boundOpt, "1.6")) 1L else 0L
   if (!(is.numeric(cores) && length(cores) == 1 && !is.na(cores) && cores >= 1))
     stop("cores must be a single integer >= 1.")
   cores <- as.integer(cores)
@@ -398,7 +413,8 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
       logZSpacing  = logZSpacing,
       logZMargin   = logZMargin,
       cores        = cores,
-      optimizer    = if (estepOptimizer == "newton") 1L else 0L)
+      optimizer    = if (estepOptimizer == "newton") 1L else 0L,
+      boundForm    = boundForm)
 
     alpha.est <- estep$alpha
     sigma.ss  <- estep$sigma_ss
@@ -434,7 +450,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
              logdet_sigma = as.numeric(determinant(sigma, logarithm = TRUE)$modulus),
              group = as.integer(group), numGroups = as.integer(numGroups),
              maxit = 0L, logZMode = 0L, logZSpacing = logZSpacing,
-             logZMargin = logZMargin, cores = cores)
+             logZMargin = logZMargin, cores = cores, boundForm = boundForm)
       c(r$elbo, r$elboObj, r$elboLap)
     }
     if (traceB) trace_mu[iter, ] <- boundAt(kappa.est)

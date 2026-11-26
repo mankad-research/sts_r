@@ -30,8 +30,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // sts_estep_cpp
-Rcpp::List sts_estep_cpp(const Rcpp::List& documents, const arma::mat& alpha_init, const arma::mat& kappa_t, const arma::mat& kappa_s, const arma::vec& mv, const arma::mat& mu, const arma::mat& Sigma_Inv, double logdet_sigma, const arma::uvec& group, int numGroups, int maxit, int logZMode, double logZSpacing, double logZMargin, int cores, int optimizer);
-RcppExport SEXP _sts_sts_estep_cpp(SEXP documentsSEXP, SEXP alpha_initSEXP, SEXP kappa_tSEXP, SEXP kappa_sSEXP, SEXP mvSEXP, SEXP muSEXP, SEXP Sigma_InvSEXP, SEXP logdet_sigmaSEXP, SEXP groupSEXP, SEXP numGroupsSEXP, SEXP maxitSEXP, SEXP logZModeSEXP, SEXP logZSpacingSEXP, SEXP logZMarginSEXP, SEXP coresSEXP, SEXP optimizerSEXP) {
+Rcpp::List sts_estep_cpp(const Rcpp::List& documents, const arma::mat& alpha_init, const arma::mat& kappa_t, const arma::mat& kappa_s, const arma::vec& mv, const arma::mat& mu, const arma::mat& Sigma_Inv, double logdet_sigma, const arma::uvec& group, int numGroups, int maxit, int logZMode, double logZSpacing, double logZMargin, int cores, int optimizer, int boundForm);
+RcppExport SEXP _sts_sts_estep_cpp(SEXP documentsSEXP, SEXP alpha_initSEXP, SEXP kappa_tSEXP, SEXP kappa_sSEXP, SEXP mvSEXP, SEXP muSEXP, SEXP Sigma_InvSEXP, SEXP logdet_sigmaSEXP, SEXP groupSEXP, SEXP numGroupsSEXP, SEXP maxitSEXP, SEXP logZModeSEXP, SEXP logZSpacingSEXP, SEXP logZMarginSEXP, SEXP coresSEXP, SEXP optimizerSEXP, SEXP boundFormSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -51,7 +51,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type logZMargin(logZMarginSEXP);
     Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
     Rcpp::traits::input_parameter< int >::type optimizer(optimizerSEXP);
-    rcpp_result_gen = Rcpp::wrap(sts_estep_cpp(documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma_Inv, logdet_sigma, group, numGroups, maxit, logZMode, logZSpacing, logZMargin, cores, optimizer));
+    Rcpp::traits::input_parameter< int >::type boundForm(boundFormSEXP);
+    rcpp_result_gen = Rcpp::wrap(sts_estep_cpp(documents, alpha_init, kappa_t, kappa_s, mv, mu, Sigma_Inv, logdet_sigma, group, numGroups, maxit, logZMode, logZSpacing, logZMargin, cores, optimizer, boundForm));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -243,7 +244,7 @@ END_RCPP
 
 static const R_CallMethodDef CallEntries[] = {
     {"_sts_sts_logZ_probe", (DL_FUNC) &_sts_sts_logZ_probe, 8},
-    {"_sts_sts_estep_cpp", (DL_FUNC) &_sts_sts_estep_cpp, 16},
+    {"_sts_sts_estep_cpp", (DL_FUNC) &_sts_sts_estep_cpp, 17},
     {"_sts_sts_optkappa_cpp", (DL_FUNC) &_sts_sts_optkappa_cpp, 13},
     {"_sts_sts_poislasso_path_cpp", (DL_FUNC) &_sts_sts_poislasso_path_cpp, 7},
     {"_sts_sts_fastanchor_cpp", (DL_FUNC) &_sts_sts_fastanchor_cpp, 3},

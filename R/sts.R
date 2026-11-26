@@ -32,7 +32,9 @@
 #' @param maxIter Maximum number of variational EM iterations; default 500 (100
 #' before sts 1.7). \code{sts()} warns if it stops here before converging, and
 #' the fit's \code{converged} component records whether it converged.
-#' @param convTol Convergence tolerance for the variational EM estimation algorithm; Default value = 1e-5.
+#' @param convTol Convergence tolerance for the variational EM algorithm, a
+#' relative change in the bound; default 1e-5. See \code{patience} for how it
+#' is used.
 #' @param initialization Character argument that allows the user to specify an initialization
 #' method. The default choice, \code{"anchor"} to initialize prevalence according to anchor words and 
 #' the key experimental covariate identified in argument \code{initializationVar}. One can also use 
@@ -87,25 +89,31 @@
 #' values trade more grid nodes for fewer exact fallbacks and do not change
 #' accuracy.
 #' @param allow.neg.change Logical. sts 1.6 and earlier used
-#' \code{delta < convTol} as the convergence test, so any decrease in the ELBO,
-#' however large, counted as convergence; on the Gadarian data this stopped 3 of
-#' 4 test fits. The default \code{FALSE} instead tracks the best bound seen and
-#' returns that iterate, stopping once the bound has decreased for
-#' \code{patience} consecutive iterations or has stopped changing by more than
-#' \code{convTol}. This can only improve on the bound the old rule returned from
-#' the same stopping point. \code{TRUE} restores the 1.6 stopping rule -- stop
-#' at the first decrease and return the last iterate. (Results from sts 1.6
-#' are not reproduced exactly in any case: 1.7 also changed the kappa update;
-#' see \code{kappaEstimation}.)
-#' @param patience Number of consecutive iterations with a decreasing ELBO
-#' tolerated before stopping, when \code{allow.neg.change = FALSE}; default 5.
-#' The bound is not guaranteed to increase monotonically for this model,
-#' because the AIC step re-selects the lasso penalty at every iteration, and it
-#' can dip for an iteration or two and then rise again. The iterate with the
-#' highest bound is returned whatever the value, so a larger \code{patience}
-#' can only find a later, higher maximum; the cost is up to \code{patience}
-#' iterations past the one returned. With \code{patience = 1}, a fit on the
-#' Gadarian data stopped at iteration 2 on such a dip.
+#' \code{delta < convTol} as the convergence test, where \code{delta} is the
+#' relative change in the bound from one iteration to the next, so any
+#' decrease, however large, counted as convergence. The default \code{FALSE}
+#' tracks the best bound seen, returns that iterate and stops by the windowed
+#' test described under \code{patience}. \code{TRUE} restores the 1.6 rule:
+#' stop at the first decrease (or at an increase smaller than \code{convTol})
+#' and return the last iterate. (Results from sts 1.6 are not reproduced
+#' exactly in any case: 1.7 also changed the kappa update; see
+#' \code{kappaEstimation} and NEWS.)
+#' @param patience Length of the window for the stopping test, when
+#' \code{allow.neg.change = FALSE}; default 20. The fit stops at iteration
+#' \eqn{t} when the best bound so far has improved by less than
+#' \code{convTol}, relative to its absolute value, over the last
+#' \code{patience} iterations, and returns the iterate with the highest
+#' bound. The bound is not monotone for this model: the kappa M-step
+#' maximizes an l1-penalized Poisson approximation of the bound, with the
+#' penalty re-selected by AIC at every iteration, rather than the bound
+#' itself, and the bound can fall for one iteration or many. A test on the
+#' change over a single iteration then stops wherever one step happens to be
+#' small. On the Gadarian data, with three held-out splits and K = 3, 5 and
+#' 10, the windowed test with \code{patience = 20} stopped at iterations
+#' 64-163, a median 11 below the best bound over 300 iterations; sts 1.7.0's
+#' rule (stop when one step changes the bound by less than \code{convTol}
+#' or after 5 consecutive decreases) stopped at iterations 6-53 and once
+#' returned iteration 1. Changed in sts 1.7.1; see NEWS.
 #' @param kappaSolver Solver for the kappa M-step. \code{"cpp"} (default) uses
 #' a dedicated Poisson-lasso solver that exploits the separable structure of the
 #' aggregated design (one two-coefficient problem per topic, sharing the lambda
@@ -163,8 +171,9 @@
 #' \code{elboLap}, where the Laplace term is
 #' \eqn{-\frac{1}{2}\log\det(-H_d)-\frac{1}{2}\log\det\Sigma}{-(1/2) log det(-H_d) - (1/2) log det(Sigma)} summed over documents), and the mean relative changes in alpha and kappa
 #' (\code{achange}, \code{kchange}). New in sts 1.7.}
-#' \item{bestIter}{The iteration whose estimates are returned (see
-#' \code{allow.neg.change}). New in sts 1.7.}
+#' \item{bestIter}{The iteration whose estimates are returned: the one with
+#' the highest bound, or the last with \code{allow.neg.change = TRUE}. New in
+#' sts 1.7.}
 #' \item{call}{The matched call. New in sts 1.7.}
 #' 
 #' 
@@ -192,7 +201,7 @@
 #' ## low max iteration number just for testing
 #' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 1, verbose = FALSE)
 #' @export
-sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2, allow.neg.change = FALSE, patience = 5L, kappaSolver = c("cpp", "glmnet"), cores = getOption("sts.cores", 1L), estepOptimizer = c("bfgs", "newton")) {
+sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2, allow.neg.change = FALSE, patience = 20L, kappaSolver = c("cpp", "glmnet"), cores = getOption("sts.cores", 1L), estepOptimizer = c("bfgs", "newton")) {
   call <- match.call()
   timer_full <- proc.time()[3]
 
@@ -342,12 +351,12 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
   elboObj_vec <- elboLap_vec <- rep(NA, maxIter)
   trace_mu <- trace_kap <- matrix(NA_real_, maxIter, 3)
   kappaLambda <- NULL
-  ## best-bound tracking and the consecutive-decrease counter (see the
-  ## convergence block below)
+  ## best-bound tracking for the windowed stopping test and the returned
+  ## iterate (see the convergence block below)
   best_elbo  <- -Inf
   best_iter  <- 1L
   best_state <- NULL
-  n_decrease <- 0L
+  best_path  <- rep(NA_real_, maxIter)
   ntokens <- sum(mod.out$settings$dim$wcounts$x)
   converge <- FALSE
   iter <- 1
@@ -473,6 +482,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
     }
     
     elbo_vec[iter] <- elbo
+    best_path[iter] <- if (iter == 1) elbo else max(best_path[iter - 1], elbo)
     elboObj_vec[iter] <- estep$elboObj
     elboLap_vec[iter] <- estep$elboLap
     if (iter == 1) {
@@ -487,43 +497,34 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
       delta <- (new - old)/(0.1 + abs(old))
 
       ## Convergence rule.  Up to sts 1.6 this was `delta < conv_criteria`,
-      ## which treats ANY decrease in the ELBO as convergence, however large:
-      ## a dip of delta = -7e-5 against convTol = 1e-5 stopped the fit.  That
-      ## fired in 3 of 4 Gadarian test runs, so reported iteration counts and
-      ## final bounds from 1.6 and earlier partly reflect premature stops
-      ## rather than convergence.
+      ## which treats ANY decrease in the bound as convergence, however large.
+      ## allow.neg.change = TRUE keeps that rule (and returns the last iterate).
       ##
-      ## Simply allowing the fit to continue past a decrease is NOT the fix.
-      ## On the Gadarian data the bound rises to a single interior maximum and
-      ## then declines monotonically for as long as it is allowed to run: K=3
-      ## with kappaEstimation = "lasso" peaks at iteration 25 and then falls
-      ## for 35 consecutive iterations (-227 by iteration 60), and K=3 with
-      ## the since-removed "adjusted" estimator peaked at iteration 8 and
-      ## fell for 52 (-1554). (Both figures are with the half-step damping
-      ## that 1.7 removed.) So the
-      ## algorithm does not merely dip; past the peak it diverges, and 1.6's
-      ## rule was accidentally stopping one iteration past the best point.
+      ## The default rule allows for a bound that is not monotone. The kappa
+      ## M-step maximizes an l1-penalized Poisson (DMR) approximation of the
+      ## bound with the penalty re-selected by AIC, not the bound itself, so
+      ## the bound rises and falls. With the bound of Chen and Mankad (2025,
+      ## Prop. 1; see NEWS 1.7.1) and the 1.7 defaults, Gadarian fits (three
+      ## held-out splits, K = 3, 5, 10, 300 iterations) decreased in 77-132
+      ## of 299 iterations, starting at iteration 2-4, with decreases about as
+      ## large as increases. On Yelp (K = 10) the bound peaked at iteration 62
+      ## and then fell at every iteration to 110; from the peak on, every kappa
+      ## update lowered it.
       ##
-      ## What is therefore fixed here is which iterate is RETURNED, not the
-      ## stopping test. The best-bound state is tracked and returned, so the
-      ## result can only improve on what the same stopping point gave before
-      ## (+2.09 and +4.40 on the two fits above). Stopping still happens on a
-      ## sustained decrease, after `patience` consecutive decreasing
-      ## iterations, which keeps the fit out of the declining region.
-      ##
-      ## allow.neg.change = TRUE restores 1.6 exactly: stop on the first
-      ## decrease and return the last iterate, not the best one.
-      if (delta < 0) n_decrease <- n_decrease + 1L else n_decrease <- 0L
-      if (delta < 0 && abs(delta) > conv_criteria && !allow.neg.change) {
-        warning(sprintf(paste0("The ELBO decreased at iteration %d ",
-                               "(relative change %.3e). The best iterate so ",
-                               "far (iteration %d) will be returned."),
-                        iter, delta, which.max(elbo_vec[1:iter])), call. = FALSE)
-      }
-      converge <- if (allow.neg.change) {
-        delta < conv_criteria
-      } else {
-        abs(delta) < conv_criteria || n_decrease >= patience
+      ## A single-step test (|delta| < convTol, or `patience` consecutive
+      ## decreases, as in 1.7.0) therefore stops wherever one step happens to
+      ## be small: at iterations 6-53 on those Gadarian fits, once returning
+      ## iteration 1. The test below is on the best bound so far instead: stop
+      ## when it has improved by less than convTol (relative) over the last
+      ## `patience` iterations. With patience = 20 the same fits stopped at
+      ## iterations 64-163, a median 11 below the 300-iteration maximum,
+      ## and Yelp returned its maximum (iteration 62) at iteration 78.
+      ## The best-bound state is tracked and returned.
+      if (allow.neg.change) {
+        converge <- delta < conv_criteria
+      } else if (iter > patience) {
+        old_best <- best_path[iter - patience]
+        converge <- (best_path[iter] - old_best) / (0.1 + abs(old_best)) < conv_criteria
       }
       
       achange <- mean(abs(alpha.est - alpha.est.old)/(0.1 + abs(alpha.est.old)))

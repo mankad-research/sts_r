@@ -14,16 +14,40 @@
   (Gamma, Sigma) update, which the Proposition 1 bound cannot.
 * The estimates at any given iteration are unchanged, but the reported
   values, the iteration at which a fit stops and the iterate it returns can
-  differ from 1.7.0. On the Yelp example of the package paper (K = 10, one
-  held-out split), 1.7.0 stopped at iteration 41 and returned iteration 36;
-  1.7.1 stops at iteration 30 and returns iteration 28, with the same
-  held-out likelihood to three decimals. `diagnostics$elboLap` is the new
-  Laplace term.
+  differ from 1.7.0. `diagnostics$elboLap` is the new Laplace term.
 * Internal option `options(sts.bound = "1.6")` restores the old term, for
   reproducing earlier fits. To reproduce an sts 1.6 fit, use
   `kappaSolver = "glmnet"`, `logZ = "exact"`, `allow.neg.change = TRUE`,
   `maxIter = 100` and
   `options(sts.kappaDamping = 0.5, sts.recoverL2 = "expgrad", sts.bound = "1.6")`.
+
+## Stopping rule
+
+* The default stopping test is now on the best bound so far: a fit stops at
+  iteration t when the best bound has improved by less than `convTol`
+  (relative) over the last `patience` iterations, and it returns the iterate
+  with the highest bound. The default `patience` is now 20 (5 in 1.7.0).
+  1.7.0 stopped when a single iteration changed the bound by less than
+  `convTol`, or after `patience` consecutive decreases.
+* Why: the bound is not monotone. The kappa M-step maximizes an l1-penalized
+  Poisson approximation of the bound, with the penalty re-selected by AIC,
+  rather than the bound itself. With the corrected bound this shows up
+  throughout a fit, not only near the end.
+  * On the Gadarian data (three held-out splits, K = 3, 5, 10, 300
+    iterations) the bound decreased in 77-132 of 299 iterations, starting at
+    iteration 2-4.
+  * Applied to the corrected bound, 1.7.0's rule would have stopped those
+    fits at iterations 6-53, one of them at iteration 6 returning iteration 1. The new rule stops them at iterations
+    64-163, a median 11 below the best bound over 300 iterations.
+  * On the Yelp example of the package paper (K = 10, one held-out split)
+    the bound peaks at iteration 62 and then falls at every iteration through
+    110, the last one run.
+    1.7.1 stops at iteration 78 and returns iteration 62. 1.7.0 stopped at
+    iteration 41 and returned iteration 36.
+* The per-iteration warning when the bound decreased is gone; a decrease is
+  expected. `diagnostics$elbo` records the bound at every iteration.
+* `allow.neg.change = TRUE` still restores 1.6's rule: stop at the first
+  decrease and return the last iterate.
 
 # sts 1.7
 

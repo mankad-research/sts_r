@@ -20,7 +20,7 @@ sts(
   logZSpacing = 0.01,
   logZMargin = 2,
   allow.neg.change = FALSE,
-  patience = 5L,
+  patience = 20L,
   kappaSolver = c("cpp", "glmnet"),
   cores = getOption("sts.cores", 1L),
   estepOptimizer = c("bfgs", "newton")
@@ -50,7 +50,9 @@ the desired number of topics.}
 before sts 1.7). \code{sts()} warns if it stops here before converging, and
 the fit's \code{converged} component records whether it converged.}
 
-\item{convTol}{Convergence tolerance for the variational EM estimation algorithm; Default value = 1e-5.}
+\item{convTol}{Convergence tolerance for the variational EM algorithm, a
+relative change in the bound; default 1e-5. See \code{patience} for how it
+is used.}
 
 \item{initialization}{Character argument that allows the user to specify an initialization
 method. The default choice, \code{"anchor"} to initialize prevalence according to anchor words and
@@ -114,26 +116,32 @@ values trade more grid nodes for fewer exact fallbacks and do not change
 accuracy.}
 
 \item{allow.neg.change}{Logical. sts 1.6 and earlier used
-\code{delta < convTol} as the convergence test, so any decrease in the ELBO,
-however large, counted as convergence; on the Gadarian data this stopped 3 of
-4 test fits. The default \code{FALSE} instead tracks the best bound seen and
-returns that iterate, stopping once the bound has decreased for
-\code{patience} consecutive iterations or has stopped changing by more than
-\code{convTol}. This can only improve on the bound the old rule returned from
-the same stopping point. \code{TRUE} restores the 1.6 stopping rule -- stop
-at the first decrease and return the last iterate. (Results from sts 1.6
-are not reproduced exactly in any case: 1.7 also changed the kappa update;
-see \code{kappaEstimation}.)}
+\code{delta < convTol} as the convergence test, where \code{delta} is the
+relative change in the bound from one iteration to the next, so any
+decrease, however large, counted as convergence. The default \code{FALSE}
+tracks the best bound seen, returns that iterate and stops by the windowed
+test described under \code{patience}. \code{TRUE} restores the 1.6 rule:
+stop at the first decrease (or at an increase smaller than \code{convTol})
+and return the last iterate. (Results from sts 1.6 are not reproduced
+exactly in any case: 1.7 also changed the kappa update; see
+\code{kappaEstimation} and NEWS.)}
 
-\item{patience}{Number of consecutive iterations with a decreasing ELBO
-tolerated before stopping, when \code{allow.neg.change = FALSE}; default 5.
-The bound is not guaranteed to increase monotonically for this model,
-because the AIC step re-selects the lasso penalty at every iteration, and it
-can dip for an iteration or two and then rise again. The iterate with the
-highest bound is returned whatever the value, so a larger \code{patience}
-can only find a later, higher maximum; the cost is up to \code{patience}
-iterations past the one returned. With \code{patience = 1}, a fit on the
-Gadarian data stopped at iteration 2 on such a dip.}
+\item{patience}{Length of the window for the stopping test, when
+\code{allow.neg.change = FALSE}; default 20. The fit stops at iteration
+\eqn{t} when the best bound so far has improved by less than
+\code{convTol}, relative to its absolute value, over the last
+\code{patience} iterations, and returns the iterate with the highest
+bound. The bound is not monotone for this model: the kappa M-step
+maximizes an l1-penalized Poisson approximation of the bound, with the
+penalty re-selected by AIC at every iteration, rather than the bound
+itself, and the bound can fall for one iteration or many. A test on the
+change over a single iteration then stops wherever one step happens to be
+small. On the Gadarian data, with three held-out splits and K = 3, 5 and
+10, the windowed test with \code{patience = 20} stopped at iterations
+64-163, a median 11 below the best bound over 300 iterations; sts 1.7.0's
+rule (stop when one step changes the bound by less than \code{convTol}
+or after 5 consecutive decreases) stopped at iterations 6-53 and once
+returned iteration 1. Changed in sts 1.7.1; see NEWS.}
 
 \item{kappaSolver}{Solver for the kappa M-step. \code{"cpp"} (default) uses
 a dedicated Poisson-lasso solver that exploits the separable structure of the
@@ -196,8 +204,9 @@ Gamma for each document}
 \code{elboLap}, where the Laplace term is
 \eqn{-\frac{1}{2}\log\det(-H_d)-\frac{1}{2}\log\det\Sigma}{-(1/2) log det(-H_d) - (1/2) log det(Sigma)} summed over documents), and the mean relative changes in alpha and kappa
 (\code{achange}, \code{kchange}). New in sts 1.7.}
-\item{bestIter}{The iteration whose estimates are returned (see
-\code{allow.neg.change}). New in sts 1.7.}
+\item{bestIter}{The iteration whose estimates are returned: the one with
+the highest bound, or the last with \code{allow.neg.change = TRUE}. New in
+sts 1.7.}
 \item{call}{The matched call. New in sts 1.7.}
 }
 \description{

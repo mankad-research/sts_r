@@ -1,7 +1,19 @@
 ## Estimates Gamma and fitted values called mu -- code based on the STM packages
 # main method up top, regression-implementations below.
 opt.mu <- function(lambda, covar=NULL, enet=NULL, ic.k=2,
-                   maxits=1000) {
+                   maxits=1000, method = "vb") {
+
+  ## Least squares (internal option sts.gammaUpdate = "ols"), for diagnostics:
+  ## the shrinkage of the regression below is one reason the bound can fall in
+  ## the (Gamma, Sigma) update.  In sts 1.7.1 it was compared with the default
+  ## on held-out likelihood (27 Gadarian fits, one Yelp split) and fitted no
+  ## better, so the default is unchanged.
+  if (identical(method, "ols")) {
+    gamma <- qr.coef(qr(covar), lambda)
+    mu <- t(covar %*% gamma)
+    if (!is.matrix(mu)) mu <- as.matrix(mu)
+    return(list(mu = mu, gamma = gamma))
+  }
 
   #Variational Linear Regression with a Gamma hyperprior
     gamma <- vector(mode="list",length=ncol(lambda))

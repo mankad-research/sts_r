@@ -51,41 +51,76 @@ namespace sts {
 class HermiteNormalizer : public Normalizer {
 public:
   // a_lo/a_hi bracket the alpha_s values the E-step is expected to visit;
-  // spacing is the grid step h.
+  // spacing is the largest grid step h.
+  //
+  // Spacing per topic (sts 1.7.1).  The interpolation error grows with
+  // S_k = max_v |kappa_s[v,k]|: the j-th derivative of logZ_k is a cumulant of
+  // kappa_s under beta, bounded by a multiple of S_k^j, so the error in the
+  // value is O((h S_k)^6) and in the j-th derivative O(S_k^j (h S_k)^(6-j)).
+  // At a fixed h it is negligible for S_k of order 1-10 and large once one
+  // word's kappa_s reaches the hundreds, which happens on small corpora run
+  // for many iterations.  Each topic therefore gets its own step
+  //     h_k = min(spacing, max_hS / S_k),
+  // so h_k * S_k <= max_hS and the relative accuracy is the same for every
+  // topic.  max_hS <= 0 disables this (h_k = spacing, as in 1.7.0).
+  //
+  // A topic whose table would need more than max_nodes nodes is evaluated
+  // exactly instead (max_nodes == 0: no limit).  In logZ = "auto" mode the
+  // E-step sets max_nodes from the expected number of evaluations, so a
+  // topic is tabulated only when that is cheaper than summing over V.
   HermiteNormalizer(const arma::mat& lin_base, const arma::mat& kappa_s,
-                    double a_lo, double a_hi, double spacing, int cores = 1)
+                    double a_lo, double a_hi, double spacing, int cores = 1,
+                    double max_hS = 0.0, double max_nodes = 0.0)
     : exact_(lin_base, kappa_s), K_(lin_base.n_cols),
-      a_lo_(a_lo), h_(spacing), n_out_(0) {
-    // Node count chosen so that the last node is at or beyond a_hi.
-    n_nodes_ = static_cast<arma::uword>(std::ceil((a_hi - a_lo) / spacing)) + 1;
-    if (n_nodes_ < 2) n_nodes_ = 2;
-    a_hi_ = a_lo_ + (n_nodes_ - 1) * h_;
-
-    f_.set_size(n_nodes_, K_);
-    d1_.set_size(n_nodes_, K_);
-    d2_.set_size(n_nodes_, K_);
+      a_lo_(a_lo), n_out_(0), n_exact_topic_(0) {
+    h_.set_size(K_); n_.set_size(K_); off_.set_size(K_ + 1); a_hi_.set_size(K_);
+    use_exact_.assign(K_, 0);
+    off_[0] = 0;
+    for (arma::uword k = 0; k < K_; ++k) {
+      const double S = arma::max(arma::abs(kappa_s.col(k)));
+      double hk = spacing;
+      if (max_hS > 0.0 && S * spacing > max_hS) hk = max_hS / S;
+      const double nk = std::ceil((a_hi - a_lo) / hk) + 1.0;
+      h_[k] = hk;
+      if (max_nodes > 0.0 && nk > max_nodes) {
+        use_exact_[k] = 1;
+        n_[k] = 0;
+        a_hi_[k] = a_lo_;
+      } else {
+        n_[k] = std::max<arma::uword>(2, static_cast<arma::uword>(nk));
+        a_hi_[k] = a_lo_ + (n_[k] - 1) * hk;
+      }
+      off_[k + 1] = off_[k] + n_[k];
+    }
+    f_.set_size(off_[K_]); d1_.set_size(off_[K_]); d2_.set_size(off_[K_]);
 
     // Every node is an independent exact evaluation, so the table is built
     // in parallel over nodes; each entry is computed identically whatever the
     // thread count, so the table is too.
     TableWorker w(*this);
-    RcppParallel::parallelFor(0, n_nodes_, w, 8, cores < 1 ? 1 : cores);
+    RcppParallel::parallelFor(0, off_[K_], w, 8, cores < 1 ? 1 : cores);
   }
 
   LogZTriple eval(unsigned int k, double a) const {
-    if (a < a_lo_ || a > a_hi_) {           // never extrapolate
+    if (use_exact_[k]) {                    // topic not tabulated
+      n_exact_topic_.fetch_add(1, std::memory_order_relaxed);
+      return exact_.eval(k, a);
+    }
+    if (a < a_lo_ || a > a_hi_[k]) {        // never extrapolate
       n_out_.fetch_add(1, std::memory_order_relaxed);
       return exact_.eval(k, a);
     }
 
-    double pos = (a - a_lo_) / h_;
+    const double h = h_[k];
+    const arma::uword nk = n_[k], o = off_[k];
+    double pos = (a - a_lo_) / h;
     arma::uword j = static_cast<arma::uword>(pos);
-    if (j >= n_nodes_ - 1) j = n_nodes_ - 2;   // right edge lands in last cell
+    if (j >= nk - 1) j = nk - 2;               // right edge lands in last cell
     const double t = pos - static_cast<double>(j);
 
-    const double f0 = f_(j, k),     f1 = f_(j + 1, k);
-    const double g0 = d1_(j, k),    g1 = d1_(j + 1, k);
-    const double s0 = d2_(j, k),    s1 = d2_(j + 1, k);
+    const double f0 = f_[o + j],     f1 = f_[o + j + 1];
+    const double g0 = d1_[o + j],    g1 = d1_[o + j + 1];
+    const double s0 = d2_[o + j],    s1 = d2_[o + j + 1];
 
     // Quintic Hermite basis on t in [0,1]; see the header comment for the
     // interpolation conditions each one satisfies.
@@ -112,44 +147,68 @@ public:
     const double ddH4 = -24.0 * t +  84.0 * t2 -  60.0 * t3;
     const double ddH5 = 0.5 * (6.0 * t - 24.0 * t2 + 20.0 * t3);
 
-    const double hg0 = h_ * g0,      hg1 = h_ * g1;
-    const double hs0 = h_ * h_ * s0, hs1 = h_ * h_ * s1;
+    const double hg0 = h * g0,     hg1 = h * g1;
+    const double hs0 = h * h * s0, hs1 = h * h * s1;
 
     LogZTriple out;
     out.f  =  f0 * H0  + hg0 * H1  + hs0 * H2
             + f1 * H3  + hg1 * H4  + hs1 * H5;
     out.d1 = (f0 * dH0 + hg0 * dH1 + hs0 * dH2
-            + f1 * dH3 + hg1 * dH4 + hs1 * dH5) / h_;
+            + f1 * dH3 + hg1 * dH4 + hs1 * dH5) / h;
     out.d2 = (f0 * ddH0 + hg0 * ddH1 + hs0 * ddH2
-            + f1 * ddH3 + hg1 * ddH4 + hs1 * ddH5) / (h_ * h_);
+            + f1 * ddH3 + hg1 * ddH4 + hs1 * ddH5) / (h * h);
     return out;
   }
 
-  arma::uword n_nodes() const { return n_nodes_; }
+  // Total nodes over the tabulated topics.
+  arma::uword n_nodes() const { return off_[K_]; }
   double range_lo() const { return a_lo_; }
-  double range_hi() const { return a_hi_; }
+  // Upper end of the table: the largest over tabulated topics (a_lo if none).
+  double range_hi() const {
+    double m = a_lo_;
+    for (arma::uword k = 0; k < K_; ++k) if (!use_exact_[k] && a_hi_[k] > m) m = a_hi_[k];
+    return m;
+  }
   long n_outside() const { return n_out_.load(std::memory_order_relaxed); }
+  long n_exact_topic_evals() const { return n_exact_topic_.load(std::memory_order_relaxed); }
+  // Per-topic step (NA for topics evaluated exactly).
+  arma::vec spacing_by_topic() const {
+    arma::vec s = h_;
+    for (arma::uword k = 0; k < K_; ++k) if (use_exact_[k]) s[k] = NA_REAL;
+    return s;
+  }
+  int n_exact_topics() const {
+    int c = 0; for (arma::uword k = 0; k < K_; ++k) c += use_exact_[k]; return c;
+  }
 
 private:
   struct TableWorker : public RcppParallel::Worker {
     FpuState fpu_;   // x87 state of the constructing (main) thread; see fpu.h
     HermiteNormalizer& hn;
     explicit TableWorker(HermiteNormalizer& hn_) : hn(hn_) {}
-    void operator()(std::size_t j0, std::size_t j1) {
+    void operator()(std::size_t i0, std::size_t i1) {
       FpuGuard fpu_guard(fpu_);
-      for (std::size_t j = j0; j < j1; ++j)
-        for (arma::uword k = 0; k < hn.K_; ++k) {
-          const LogZTriple t = hn.exact_.eval(k, hn.a_lo_ + j * hn.h_);
-          hn.f_(j, k) = t.f; hn.d1_(j, k) = t.d1; hn.d2_(j, k) = t.d2;
-        }
+      // node i belongs to the topic k with off_[k] <= i < off_[k+1]
+      arma::uword k = 0;
+      while (k + 1 < hn.K_ && hn.off_[k + 1] <= i0) ++k;
+      for (std::size_t i = i0; i < i1; ++i) {
+        while (hn.off_[k + 1] <= i) ++k;
+        const arma::uword j = i - hn.off_[k];
+        const LogZTriple t = hn.exact_.eval(k, hn.a_lo_ + j * hn.h_[k]);
+        hn.f_[i] = t.f; hn.d1_[i] = t.d1; hn.d2_[i] = t.d2;
+      }
     }
   };
 
   ExactNormalizer exact_;
-  arma::uword K_, n_nodes_;
-  double a_lo_, a_hi_, h_;
-  arma::mat f_, d1_, d2_;
+  arma::uword K_;
+  double a_lo_;
+  arma::vec h_, a_hi_;
+  arma::uvec n_, off_;
+  std::vector<int> use_exact_;
+  arma::vec f_, d1_, d2_;
   mutable std::atomic<long> n_out_;
+  mutable std::atomic<long> n_exact_topic_;
 };
 
 }  // namespace sts

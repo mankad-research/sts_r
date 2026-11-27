@@ -46,12 +46,25 @@ assess how document-level meta-data determine prevalence and sentiment/discourse
 The regressions account for uncertainty in the latent document-level
 variables by the method of composition: \code{nsims} times, the prevalence
 and sentiment-discourse values of every document are drawn from a normal
-distribution centred at their estimates with covariance \code{object$sigma},
-each outcome is regressed on the covariates, and \code{nsims_se} draws are
-taken from each fitted regression's sampling distribution. Estimates and
-standard errors are the mean and standard deviation of the pooled draws.
-Results depend on the random number generator; call \code{set.seed()} first
-for reproducible tables.
+distribution centred at their estimates, each outcome is regressed on the
+covariates, and \code{nsims_se} draws are taken from each fitted
+regression's sampling distribution. Estimates and standard errors are the
+mean and standard deviation of the pooled draws. Results depend on the
+random number generator; call \code{set.seed()} first for reproducible
+tables.
+
+The draws share one covariance matrix, the average of the documents'
+variational (Laplace) covariances. It is computed as
+\eqn{\Sigma - \frac{1}{D}\sum_d (\alpha_d - \mu_d)(\alpha_d - \mu_d)^\top}{Sigma - (1/D) sum_d (alpha_d - mu_d)(alpha_d - mu_d)'},
+since the M-step sets \eqn{\Sigma}{Sigma} to the average variational
+covariance plus that average outer product. This is the "Global"
+approximation that \pkg{stm}'s \code{estimateEffect()} uses (see
+\code{stm::thetaPosterior()}). sts 1.7.0 and earlier drew with
+\code{object$sigma}, the prior covariance, which also contains the spread
+of the documents around their fitted means and so overstates the
+uncertainty: their standard errors are larger. The internal option
+\code{options(sts.regnsSigma = "prior")} restores that behaviour, to
+reproduce earlier tables.
 }
 \examples{
 \donttest{

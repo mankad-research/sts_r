@@ -10,7 +10,7 @@
 ## reproduce the 1.6 fits up to floating-point reassociation:
 ##   kappaSolver = "glmnet", logZ = "exact", allow.neg.change = TRUE,
 ##   estepOptimizer = "bfgs",
-##   options(sts.kappaDamping = 0.5, sts.recoverL2 = "expgrad").
+##   options(sts.kappaDamping = 0.5, sts.recoverL2 = "expgrad", sts.bound = "1.6").
 ##
 ## Exact agreement relies on the same glmnet, BLAS and libm as the machine
 ## that made the fixtures (Ubuntu 24.04, R 4.3.3, glmnet 4.1-8): AIC selection
@@ -24,7 +24,8 @@ test_that("1.7 reproduces sts 1.6 in the 1.6 configuration", {
               "set STS_REGRESSION_TESTS=true to compare with the sts 1.6 fixtures")
   ref <- readRDS(test_path("fixtures", "ref16_gadarian.rds"))
   cp <- gad_corpus()
-  old <- options(sts.kappaDamping = 0.5, sts.recoverL2 = "expgrad"); on.exit(options(old))
+  old <- options(sts.kappaDamping = 0.5, sts.recoverL2 = "expgrad", sts.bound = "1.6")
+  on.exit(options(old))
   for (nm in names(ref)) {
     r <- ref[[nm]]; K <- ncol(r$kappa_t)
     set.seed(r$seed)

@@ -1,0 +1,464 @@
+\documentclass[11pt]{article}
+%% Source of the sts vignette (inst/doc/vignette.pdf). It is not built by
+%% R CMD build: the PDF is shipped through the R.rsp::asis engine. To rebuild
+%% it, see vignettes/source/README.
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{natbib}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{Sweave}
+\SweaveOpts{keep.source=TRUE}
+\DefineVerbatimEnvironment{Sinput}{Verbatim}{fontsize=\small,formatcom=\color{blue!50!black}}
+\DefineVerbatimEnvironment{Soutput}{Verbatim}{fontsize=\small}
+\fvset{listparameters={\setlength{\topsep}{2pt}}}
+\renewenvironment{Schunk}{\vspace{2pt}}{\vspace{2pt}}
+\newcommand{\pkg}[1]{\textbf{#1}}
+\newcommand{\code}[1]{\texttt{#1}}
+\setlength{\parskip}{4pt}
+
+\title{Using the \pkg{sts} Package (Version 1.7.1)}
+\author{Shawn Mankad\\North Carolina State University \and Li Chen\\Cornell University}
+\date{November 2026}
+
+\begin{document}
+\maketitle
+
+<<setup, echo=FALSE>>=
+options(width = 80, digits = 4, continue = "  ", prompt = "R> ")
+library(sts)
+@
+
+\begin{abstract}
+The Structural Topic and Sentiment-Discourse (STS) model of
+\citet{ChenMankad2025} is a topic model in which document-level covariates
+determine both how much each topic is discussed (its prevalence) and how it is
+discussed (a latent sentiment-discourse value for each topic in each
+document). This vignette shows how to prepare text for the \pkg{sts} package,
+fit the model, read the fitted object and its convergence record, estimate
+the covariate effects with their uncertainty, and choose the estimation
+settings. It describes version 1.7.1; the changes from earlier releases are
+listed in the package's \code{NEWS} file and summarized in
+Section~\ref{sec:versions}.
+\end{abstract}
+
+\section{The model}\label{sec:model}
+
+A corpus has $D$ documents and a vocabulary of $V$ words. Document $d$ has
+covariates $\bm x_d$ (with an intercept) and a vector of word counts. The STS
+model has $K$ topics and, for each document, a latent vector
+$\bm u_d=(\bm\eta_d,\bm\alpha_d)$ with
+\begin{equation*}
+\bm u_d \sim N(\bm\Gamma^\top\bm x_d,\ \bm\Sigma),\qquad
+\bm\eta_d\in\mathbb R^{K-1},\quad \bm\alpha_d\in\mathbb R^{K}.
+\end{equation*}
+The topic proportions are $\bm\theta_d=\mathrm{softmax}(\bm\eta_d,0)$, so the
+$K$-th topic is the reference. The entry $\alpha_{dk}$ is the
+sentiment-discourse of document $d$ on topic $k$: it shifts topic $k$'s word
+distribution,
+\begin{equation*}
+\beta_{kv}(\alpha_{dk}) \propto \exp\bigl(m_v + \kappa^{(t)}_{vk} + \kappa^{(s)}_{vk}\,\alpha_{dk}\bigr),
+\end{equation*}
+where $m_v$ is the log of word $v$'s overall frequency, $\kappa^{(t)}_{vk}$
+is the topic's own deviation from it and $\kappa^{(s)}_{vk}$ says how word $v$
+responds to sentiment-discourse on topic $k$. Each word of document $d$ is
+drawn by choosing a topic from $\bm\theta_d$ and then a word from
+$\bm\beta_k(\alpha_{dk})$. The regression coefficients $\bm\Gamma$ are the
+quantities of interest in most applications: the first $K-1$ columns say how
+the covariates move topic prevalence, the last $K$ how they move
+sentiment-discourse.
+
+\paragraph{Estimation.} \code{sts()} fits the model by the Laplace
+variational EM algorithm of \citet{ChenMankad2025}:
+\begin{itemize}
+\item \textbf{E-step.} For each document, $\hat{\bm u}_d$ maximizes the
+log-posterior $f_d(\bm u_d)$ (by BFGS), and the variational covariance is
+$(-\bm H_d)^{-1}$, the inverse of the negative Hessian at the mode.
+\item \textbf{M-step for $\bm\Gamma$ and $\bm\Sigma$.} Each column of
+$\bm\Gamma$ is estimated by the variational linear regression of \pkg{stm},
+which shrinks the non-intercept coefficients toward zero, of the
+$\hat{\bm u}_d$ on the covariates. $\bm\Sigma$ is then the average of the documents' covariances plus the spread
+of the $\hat{\bm u}_d$ around their fitted means.
+\item \textbf{M-step for $\bm\kappa$.} The expected word counts are
+aggregated within the levels of the initialization variable, and each word's
+coefficients are estimated by a Poisson regression with an $\ell_1$
+(lasso) penalty, chosen by AIC along a regularization path. This is the
+distributed multinomial regression approximation of \citet{Taddy2015}.
+\end{itemize}
+The fit is tracked through the approximate evidence lower bound of
+\citet[Proposition~1]{ChenMankad2025},
+\begin{equation*}
+\mathcal B=\sum_d\Bigl[f_d(\hat{\bm u}_d)-\tfrac12\log\det(-\bm H_d)
+-\tfrac12\log\det\bm\Sigma\Bigr],
+\end{equation*}
+reported without its additive constant. Section~\ref{sec:convergence}
+explains why $\mathcal B$ does not rise at every iteration and how
+\code{sts()} decides when to stop.
+
+\section{Preparing the text}\label{sec:prep}
+
+The examples use the \code{gadarian} data shipped with the package: 341
+open-ended survey responses from an experiment on anxiety about immigration
+\citep{Gadarian2014}, with a treatment indicator and the respondent's party
+identification. \code{textProcessor()} lower-cases the text, removes
+stop words, punctuation and numbers, and stems; \code{prepDocuments()}
+builds the vocabulary and the sparse document representation, drops words
+that appear in too few documents (\code{lower.thresh}) and drops documents
+left empty. Both are ports of the functions of the same
+names in \pkg{stm} \citep{Roberts2019}, so text prepared for \pkg{stm} can be
+used directly.
+
+<<prep>>=
+temp <- textProcessor(documents = gadarian$open.ended.response,
+                      metadata = gadarian, verbose = FALSE)
+out <- prepDocuments(temp$documents, temp$vocab, temp$meta, verbose = FALSE)
+length(out$documents); length(out$vocab)
+@
+
+Each element of \code{out\$documents} is a two-row integer matrix: vocabulary
+indices in the first row and counts in the second. \code{out\$meta} holds
+the covariates of the documents that were kept.
+
+\paragraph{The initialization variable.} \code{sts()} needs one covariate,
+\code{initializationVar}, whose levels are used to aggregate word counts in
+the $\bm\kappa$ M-step and to initialize the sentiment-discourse values. It
+is usually the main experimental or outcome variable: here the treatment,
+coded $\pm1$; for online reviews, the star rating.
+
+<<initvar>>=
+out$meta$noTreatment <- ifelse(out$meta$treatment == 1, -1, 1)
+@
+
+\section{Fitting the model}\label{sec:fit}
+
+The first argument gives the covariates of $\bm\Gamma$, the second the
+initialization variable.
+
+<<fit>>=
+set.seed(2024)
+fit <- sts(~ treatment * pid_rep, ~ noTreatment, out, K = 3, verbose = FALSE)
+fit
+@
+
+<<fitinfo, echo=FALSE>>=
+fitIters <- length(fit$elbo); fitBest <- fit$bestIter
+fitTime <- round(fit$runtime, 1)
+@
+
+The fit ran \Sexpr{fitIters} iterations (\Sexpr{fitTime} seconds on one
+thread of the machine that built this vignette) and returns iteration
+\Sexpr{fitBest}, the one with the highest bound.
+The main components of the fitted object are:
+\begin{itemize}
+\item \code{alpha}: the $D\times(2K-1)$ matrix of the $\hat{\bm u}_d$
+(prevalence logits, then sentiment-discourse values);
+\item \code{gamma}: $\hat{\bm\Gamma}$, labelled by covariate and topic, also
+returned by \code{coef(fit)};
+\item \code{kappa}: the list \code{kappa\_t}, \code{kappa\_s} of $V\times K$
+matrices; \code{mv}: the $m_v$;
+\item \code{sigma} and \code{sigma\_inv}: $\hat{\bm\Sigma}$ and its inverse;
+\item \code{elbo}: $\mathcal B$ at every iteration; \code{bestIter}: the
+iteration whose estimates are returned; \code{converged}: whether the
+stopping test was met before \code{maxIter};
+\item \code{diagnostics}: a data frame with, per iteration, $\mathcal B$, its
+data-fit and Laplace terms, and the mean relative changes in $\bm\alpha$ and
+$\bm\kappa$.
+\end{itemize}
+
+<<coef>>=
+coef(fit, "sentiment")
+@
+
+\section{Convergence}\label{sec:convergence}
+
+$\mathcal B$ is not monotone for this model, and \code{sts()} is designed for
+that. The $\bm\kappa$ M-step maximizes a penalized Poisson approximation
+rather than $\mathcal B$ itself, and the penalty is re-selected by AIC at
+every iteration, so the bound can fall for one iteration or for many. (The
+E-step maximizes $f_d$ rather than $f_d-\frac12\log\det(-\bm H_d)$, which can
+lower it slightly too.) A test on the change over one iteration would stop
+wherever one step happens to be small. \code{sts()} instead tracks the best
+bound so far, $\mathcal B^*_t=\max_{s\le t}\mathcal B_s$, and stops at the
+first iteration $t$ with
+\begin{equation*}
+\frac{\mathcal B^*_t-\mathcal B^*_{t-W}}{0.1+|\mathcal B^*_{t-W}|}<\code{convTol},
+\end{equation*}
+where $W$ is \code{patience} (default 20) and \code{convTol} defaults to
+$10^{-5}$. It returns the iterate with the highest bound. If the test is not
+met within \code{maxIter} iterations (default 500), \code{sts()} warns and
+sets \code{converged = FALSE}.
+
+<<boundplot, fig=TRUE, width=6.5, height=3.2, include=FALSE>>=
+d <- fit$diagnostics
+par(mar = c(4, 4.5, 0.5, 0.5))
+plot(d$iter, d$elbo, type = "l", xlab = "Iteration", ylab = "Bound")
+abline(v = fit$bestIter, lty = 2)
+@
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.85\textwidth]{usingSTS-boundplot}
+\caption{The bound at each iteration of the Gadarian fit; the dashed line is
+the returned iterate.}\label{fig:bound}
+\end{figure}
+
+<<nfalls>>=
+sum(diff(fit$elbo) < 0)    # iterations in which the bound fell
+@
+
+Figure~\ref{fig:bound} shows the trajectory. The first iterations raise the
+bound by far more than the later ones, and the later ones rise and fall by
+small amounts. \code{allow.neg.change = TRUE} restores the rule of
+\pkg{sts}~1.6 and earlier: stop at the first iteration whose relative change
+is below \code{convTol}, including any decrease, and return the last iterate.
+
+\section{Interpreting a fit}\label{sec:interpret}
+
+\subsection{Topics and their words}
+
+\code{printTopWords()} lists each topic's most likely words at low
+sentiment-discourse (the 5th percentile of that topic's $\hat\alpha_{dk}$
+over documents), at the average and at high sentiment-discourse (the 95th
+percentile); \code{plot()} draws the same information with the word
+probabilities (Figure~\ref{fig:words}).
+
+<<topwords>>=
+printTopWords(fit, n = 7)
+@
+
+<<wordplot, fig=TRUE, width=7, height=5, include=FALSE>>=
+print(plot(fit, n = 7))
+@
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\textwidth]{usingSTS-wordplot}
+\caption{\code{plot(fit)}: the most likely words of each topic at low, average
+and high sentiment-discourse.}\label{fig:words}
+\end{figure}
+
+\code{topicSemanticCoherence()} and \code{topicExclusivity()} compute the two
+topic-quality measures used with \pkg{stm} \citep{Mimno2011,Roberts2014}, on
+the topic-word distributions at the average sentiment-discourse.
+<<quality>>=
+topicSemanticCoherence(fit, out)
+topicExclusivity(fit)
+@
+
+\subsection{Representative documents}
+
+\code{findRepresentativeDocs()} returns the \code{n} documents with the
+highest proportion of a topic, with the quartile of each one's
+sentiment-discourse on that topic, and \code{plotRepresentativeDocs()} draws
+their text.
+<<repdocs>>=
+docs <- findRepresentativeDocs(fit, out$meta$open.ended.response, topic = 1, n = 4)
+docs[, c("index", "sentiment_quartile")]
+@
+
+\subsection{Covariate effects}
+
+The point estimates $\hat{\bm\Gamma}$ ignore the uncertainty in the
+document-level variables. \code{estimateRegns()} accounts for it by the
+method of composition \citep{Treier2008}, as \pkg{stm}'s
+\code{estimateEffect()} does: it draws every document's $\bm u_d$ from a
+normal distribution centred at $\hat{\bm u}_d$, regresses the topic
+proportions and the sentiment-discourse values on the covariates, and pools
+the draws over many such data sets. The draws share one covariance matrix,
+the average of the documents' variational covariances, which is \pkg{stm}'s
+``Global'' approximation.
+
+<<regns>>=
+set.seed(1)
+regns <- estimateRegns(fit, ~ treatment * pid_rep, out)
+printRegnTables(regns, topics = 1)
+@
+
+The result has \code{coef()}, \code{vcov()}, \code{confint()} and
+\code{as.data.frame()} methods.
+<<confint>>=
+confint(regns, topic = 1, type = "sentiment")
+@
+The tables depend on the random number generator, so set the seed for
+reproducible results; \code{nsims} (default 25) and \code{nsims\_se}
+(default 250) set the number of draws.
+
+\subsection{Held-out likelihood and the number of topics}
+
+\code{make.heldout()} removes a share of the words of some documents, and
+\code{heldoutLikelihood()} evaluates the fitted model on them: the result is
+the average over documents of each document's mean held-out log-likelihood
+per word. Comparing it across values of $K$ is one way to choose the number
+of topics.
+
+<<heldout>>=
+ho <- make.heldout(out$documents, out$vocab, seed = 1)
+ho$meta <- out$meta
+sapply(c(3, 5), function(K) {
+  set.seed(2024)
+  f <- sts(~ treatment * pid_rep, ~ noTreatment, ho, K = K, verbose = FALSE)
+  heldoutLikelihood(f, ho$missing)$expected.heldout
+})
+@
+
+\section{Estimation settings}\label{sec:settings}
+
+Table~\ref{tab:args} lists the arguments of \code{sts()} that control
+estimation. The defaults suit most uses; the rest of this section explains
+the ones users most often change.
+
+\begin{table}[ht]
+\centering\small
+\caption{Estimation arguments of \code{sts()}.}\label{tab:args}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Argument & Default & Role\\
+\midrule
+\code{maxIter} & 500 & iteration cap\\
+\code{convTol} & $10^{-5}$ & relative tolerance of the stopping test\\
+\code{patience} & 20 & window $W$ of the stopping test\\
+\code{allow.neg.change} & \code{FALSE} & \code{TRUE}: the stopping rule of 1.6\\
+\code{initialization} & \code{"anchor"} & spectral (anchor-word) or STM initialization\\
+\code{cores} & \code{getOption("sts.cores", 1)} & threads; results do not depend on it\\
+\code{logZ} & \code{"auto"} & log-partition: exact sums or interpolated tables\\
+\code{logZSpacing} & 0.01 & largest table step\\
+\code{logZMargin} & 2 & table range beyond the observed $\hat\alpha$\\
+\code{kappaSolver} & \code{"cpp"} & $\bm\kappa$ M-step solver (\code{"glmnet"}: as in 1.6)\\
+\code{estepOptimizer} & \code{"bfgs"} & E-step optimizer (\code{"newton"} also available)\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Threads.} \code{cores} sets the number of threads for the E-step
+(parallel over documents), the $\bm\kappa$ M-step (parallel over words) and
+the spectral initialization. The work is divided into blocks that depend
+only on the data, and partial results are combined in a fixed order, so a
+fit is identical for any number of threads. \code{options(sts.cores = n)}
+sets the default for a session.
+
+\paragraph{The log-partition functions.} Each E-step needs, for every topic,
+$\log Z_k(a)=\log\sum_v\exp(m_v+\kappa^{(t)}_{vk}+\kappa^{(s)}_{vk}a)$ and
+its first two derivatives. Within an E-step these are fixed functions of the
+scalar $a$, shared by all documents. \code{logZ = "exact"} sums over the
+vocabulary at every evaluation; \code{"interpolated"} tabulates them once per
+E-step and interpolates with quintic Hermite polynomials, so the cost per
+document no longer depends on $V$. The table's step for topic $k$ is the
+smaller of \code{logZSpacing} and $0.1/S_k$, where
+$S_k=\max_v|\kappa^{(s)}_{vk}|$: the interpolation error depends on the step
+only through $hS_k$, so this keeps it at the same small relative size when a
+word's coefficient becomes large, as it can on a small corpus fitted for many
+iterations. Values outside the table are computed exactly. The default
+\code{"auto"} decides for each topic at every E-step: it tabulates a topic
+when that is cheaper than summing over the vocabulary for every document
+(about 20 evaluations each, with a factor of 4 to spare), and uses the exact
+sums otherwise. The break-even point grows with $D$: with the 341 Gadarian
+documents a topic is tabulated while its table needs fewer than about 1,700
+nodes, which holds at the default step and fails once $S_k$ is large; on a
+corpus of tens of thousands of documents the tables are used throughout, and
+the saving grows with $D$.
+
+\paragraph{Initialization.} \code{initialization = "anchor"} (the default)
+initializes the topics by the spectral anchor-word method of
+\citet{Arora2013}, as in \pkg{stm}, and the sentiment-discourse values from
+the centred initialization variable. \code{initialization = "stm"} fits a
+structural topic model with the initialization variable as its content
+covariate and initializes $\bm\kappa$ from its word effects; a prefit
+\pkg{stm} model can be passed as \code{stmSeed}.
+
+\paragraph{Solvers.} The $\bm\kappa$ M-step uses a Poisson-lasso solver
+written for the aggregated problem, which reproduces \pkg{glmnet}'s
+regularization path and AIC selection \citep{Friedman2010} and solves each
+problem to a tight tolerance; \code{kappaSolver = "glmnet"} uses
+\pkg{glmnet} itself. \code{estepOptimizer = "newton"} replaces BFGS by
+Newton's method with the exact Hessian, which needs fewer evaluations and is
+faster when \code{logZ = "exact"}.
+
+\section{Versions and reproducibility}\label{sec:versions}
+
+Version 1.7 made estimation much faster and changed several defaults;
+1.7.1 corrected the reported bound, the stopping rule, the accuracy of the
+tables at large $S_k$ and the covariance used by \code{estimateRegns()}. The
+\code{NEWS} file lists every change and its effect on results. In short:
+\begin{itemize}
+\item Up to 1.7.0, the reported bound used the term
+$+\frac14\log\det(-\bm H_d)$ instead of Proposition~1's
+$-\frac12\log\det(-\bm H_d)$. The estimates at a given iteration did not
+depend on it, but the stopping point and the returned iterate did.
+\code{options(sts.bound = "1.6")} restores the old term.
+\item Up to 1.7.0, \code{estimateRegns()} drew with $\hat{\bm\Sigma}$, the
+prior covariance, which overstates the uncertainty in the document-level
+variables. \code{options(sts.regnsSigma = "prior")} restores it.
+\item 1.7 removed a half-step damping of the $\bm\kappa$ update that 1.1--1.6
+applied, and replaced a non-converging solver in the anchor-word
+initialization; \code{options(sts.kappaDamping = 0.5)} and
+\code{options(sts.recoverL2 = "expgrad")} restore them.
+\end{itemize}
+A fit of \pkg{sts}~1.6 is reproduced, up to floating-point reassociation, by
+<<recipe16, eval=FALSE>>=
+options(sts.kappaDamping = 0.5, sts.recoverL2 = "expgrad", sts.bound = "1.6")
+fit16 <- sts(~ treatment * pid_rep, ~ noTreatment, out, K = 3,
+             kappaSolver = "glmnet", logZ = "exact",
+             allow.neg.change = TRUE, maxIter = 100)
+@
+\code{options(sts.regnsSigma = "prior")} gives \code{estimateRegns()} the
+covariance of earlier releases, but their tables are not reproduced exactly:
+1.7 fixed a bug in the prevalence tables of 1.6 and earlier, and the random
+stream differs. Results agree across platforms up to rounding, except that
+AIC selection is discontinuous at near-ties, so a rounding difference
+occasionally changes the penalty chosen for a word and, through it, the
+later iterates.
+
+\bibliographystyle{apalike}
+\begin{thebibliography}{}
+\bibitem[Arora et~al., 2013]{Arora2013}
+Arora, S., Ge, R., Halpern, Y., Mimno, D., Moitra, A., Sontag, D., Wu, Y., and
+Zhu, M. (2013).
+\newblock A practical algorithm for topic modeling with provable guarantees.
+\newblock In \emph{Proceedings of the 30th International Conference on Machine
+Learning}, pages 280--288.
+
+\bibitem[Chen and Mankad, 2025]{ChenMankad2025}
+Chen, L. and Mankad, S. (2025).
+\newblock A structural topic and sentiment-discourse model for text analysis.
+\newblock \emph{Management Science}, 71(7):5767--5787.
+
+\bibitem[Friedman et~al., 2010]{Friedman2010}
+Friedman, J., Hastie, T., and Tibshirani, R. (2010).
+\newblock Regularization paths for generalized linear models via coordinate
+descent.
+\newblock \emph{Journal of Statistical Software}, 33(1):1--22.
+
+\bibitem[Gadarian and Albertson, 2014]{Gadarian2014}
+Gadarian, S.~K. and Albertson, B. (2014).
+\newblock Anxiety, immigration, and the search for information.
+\newblock \emph{Political Psychology}, 35(2):133--164.
+
+\bibitem[Mimno et~al., 2011]{Mimno2011}
+Mimno, D., Wallach, H.~M., Talley, E., Leenders, M., and McCallum, A. (2011).
+\newblock Optimizing semantic coherence in topic models.
+\newblock In \emph{Proceedings of the 2011 Conference on Empirical Methods in
+Natural Language Processing}, pages 262--272.
+
+\bibitem[Roberts et~al., 2014]{Roberts2014}
+Roberts, M.~E., Stewart, B.~M., Tingley, D., Lucas, C., Leder-Luis, J.,
+Gadarian, S.~K., Albertson, B., and Rand, D.~G. (2014).
+\newblock Structural topic models for open-ended survey responses.
+\newblock \emph{American Journal of Political Science}, 58(4):1064--1082.
+
+\bibitem[Roberts et~al., 2019]{Roberts2019}
+Roberts, M.~E., Stewart, B.~M., and Tingley, D. (2019).
+\newblock stm: An {R} package for structural topic models.
+\newblock \emph{Journal of Statistical Software}, 91(2):1--40.
+
+\bibitem[Taddy, 2015]{Taddy2015}
+Taddy, M. (2015).
+\newblock Distributed multinomial regression.
+\newblock \emph{The Annals of Applied Statistics}, 9(3):1394--1414.
+
+\bibitem[Treier and Jackman, 2008]{Treier2008}
+Treier, S. and Jackman, S. (2008).
+\newblock Democracy as a latent variable.
+\newblock \emph{American Journal of Political Science}, 52(1):201--217.
+\end{thebibliography}
+
+\end{document}

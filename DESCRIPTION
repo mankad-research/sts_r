@@ -1,8 +1,8 @@
 Package: sts
 Type: Package
 Title: Estimation of the Structural Topic and Sentiment-Discourse Model for Text Analysis
-Version: 1.7
-Date: 2026-11-25
+Version: 1.7.1
+Date: 2026-11-26
 Authors@R: c(person(given = "Shawn",
                       family = "Mankad",
                       role = c("aut", "cre"),

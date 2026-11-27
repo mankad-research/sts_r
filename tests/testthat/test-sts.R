@@ -49,20 +49,37 @@ test_that("exact and interpolated log-partition fits agree", {
   expect_equal(i$alpha, e$alpha, tolerance = 1e-2)
 })
 
-test_that("the best iterate is returned and stopping follows allow.neg.change", {
-  f <- fit_gad(maxIter = 60, patience = 2L)
-  e <- f$elbo
+test_that("the best iterate is returned and stopping follows the windowed rule", {
+  ## Default rule (1.7.1): stop at iteration t when the best bound so far has
+  ## improved by less than convTol (relative) over the last `patience`
+  ## iterations; return the iterate with the highest bound.
+  win <- function(e, t, P) { b <- cummax(e); (b[t] - b[t - P]) / (0.1 + abs(b[t - P])) }
+  f <- fit_gad(maxIter = 60, patience = 5L, convTol = 1e-4)
+  e <- f$elbo; n <- length(e)
   expect_equal(f$bestIter, which.max(e))
-  if (length(e) < 60) {
-    ## stopped early: either converged, or `patience` consecutive decreases
-    dec <- diff(e) < 0
-    converged <- abs(diff(tail(e, 2))) / abs(tail(e, 1)) < 1e-5
-    expect_true(converged || all(tail(dec, 2)))
+  expect_equal(f$elbo[f$bestIter], max(f$elbo))
+  expect_gt(n, 5)
+  if (n < 60) {
+    expect_true(f$converged)
+    expect_lt(win(e, n, 5), 1e-4)
   }
+  ## and the test did not fire at any earlier iteration
+  if (n > 6) for (t in 6:(n - 1)) expect_gte(win(e, t, 5), 1e-4)
+  ## it cannot fire before iteration patience + 1, and fires there when
+  ## convTol is huge
+  g <- fit_gad(maxIter = 60, patience = 3L, convTol = 1)
+  expect_length(g$elbo, 4)
+  expect_true(g$converged)
+  ## a single small step no longer stops the fit: 1.7.0 stopped whenever one
+  ## step changed the bound by less than convTol
+  h <- fit_gad(maxIter = 12, patience = 20L, convTol = 1)
+  expect_length(h$elbo, 12)
+  expect_false(h$converged)
   ## allow.neg.change = TRUE: stop at the first decrease, return the last iterate
-  g <- fit_gad(maxIter = 60, allow.neg.change = TRUE)
-  d <- diff(g$elbo)
+  a <- fit_gad(maxIter = 60, allow.neg.change = TRUE)
+  d <- diff(a$elbo)
   expect_true(all(head(d, -1) >= 0))
+  expect_equal(a$bestIter, length(a$elbo))
 })
 
 test_that("a fit that stops at maxIter warns and is marked unconverged", {
@@ -121,4 +138,20 @@ test_that("post-estimation functions run on a fit", {
   hl <- heldoutLikelihood(fh, ho$missing)
   expect_true(is.finite(hl$expected.heldout))
   expect_lt(hl$expected.heldout, 0)
+})
+
+test_that("internal options: least-squares Gamma and the iteration hook", {
+  cp <- gad_corpus()
+  old <- options(sts.gammaUpdate = "ols",
+                 sts.iterHook = function(iter, st) c(iter, length(st$elbo)))
+  on.exit(options(old))
+  set.seed(2024)
+  f <- suppressWarnings(sts(~ treatment * pid_rep, ~ noTreatment, cp, K = 3, maxIter = 3,
+                            allow.neg.change = TRUE, convTol = -1, verbose = FALSE))
+  X <- cbind(1, model.matrix(~ treatment * pid_rep, cp$meta)[, -1])
+  expect_equal(unname(f$gamma), unname(qr.coef(qr(X), f$alpha)), tolerance = 1e-10)
+  expect_equal(f$hookTrace, lapply(1:3, function(i) c(i, i)))
+  options(sts.gammaUpdate = "bad")
+  expect_error(sts(~ treatment, ~ noTreatment, cp, K = 3, maxIter = 1, verbose = FALSE),
+               "sts.gammaUpdate")
 })

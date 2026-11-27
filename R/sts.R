@@ -32,7 +32,9 @@
 #' @param maxIter Maximum number of variational EM iterations; default 500 (100
 #' before sts 1.7). \code{sts()} warns if it stops here before converging, and
 #' the fit's \code{converged} component records whether it converged.
-#' @param convTol Convergence tolerance for the variational EM estimation algorithm; Default value = 1e-5.
+#' @param convTol Convergence tolerance for the variational EM algorithm, a
+#' relative change in the bound; default 1e-5. See \code{patience} for how it
+#' is used.
 #' @param initialization Character argument that allows the user to specify an initialization
 #' method. The default choice, \code{"anchor"} to initialize prevalence according to anchor words and 
 #' the key experimental covariate identified in argument \code{initializationVar}. One can also use 
@@ -75,37 +77,54 @@
 #' per-document cost from \eqn{O(VK)} to \eqn{O(n_d K)} for a document with
 #' \eqn{n_d} distinct words. Values falling outside the tabulated range are
 #' evaluated exactly, so no value is ever extrapolated. The default,
-#' \code{"auto"}, uses the table when the corpus is large enough for it to pay
-#' off and the exact sum otherwise.
-#' @param logZSpacing Grid spacing for \code{logZ = "interpolated"}; default
-#' 0.01. Accuracy is not monotone in this value: the interpolated second
-#' derivative divides by the square of the spacing, so very fine grids
-#' eventually lose accuracy to rounding. 0.01 is near the optimum, and 0.02 is
-#' slightly faster with essentially the same typical accuracy.
+#' \code{"auto"}, decides for each topic at every E-step: it tabulates the
+#' topic when that is cheaper than summing over the vocabulary for every
+#' document (about 20 evaluations per document, with a factor of 4 to spare)
+#' and uses the exact sums otherwise. (sts 1.7.0 decided once, for all
+#' topics, at the start.)
+#' @param logZSpacing Largest grid step for the interpolated log-partition;
+#' default 0.01. Topic \eqn{k} uses the step
+#' \eqn{h_k = \min(}\code{logZSpacing}\eqn{, 0.1/S_k)}{h_k = min(logZSpacing, 0.1/S_k)}, where
+#' \eqn{S_k = \max_v |\kappa_{s[v,k]}|}{S_k = max |kappa_s[, k]|}: the
+#' interpolation error depends on the step through \eqn{h S_k} (it is of order
+#' \eqn{(h S_k)^6} in the value and \eqn{S_k^2 (h S_k)^4} in the second
+#' derivative), so this keeps it small when a word's coefficient becomes
+#' large, as it can on small corpora fitted for many iterations. (sts 1.7.0
+#' used \code{logZSpacing} for every topic.) In our tests the error in
+#' \eqn{\log Z_k} stayed below about \eqn{10^{-11}} at these steps, for
+#' \eqn{S_k} from 1 to 400. Accuracy is not monotone in the step: the
+#' interpolated second derivative divides by the square of the step, so very
+#' fine grids eventually lose accuracy to rounding.
 #' @param logZMargin How far beyond the observed range of latent
 #' sentiment-discourse values to tabulate, in the same units; default 2. Larger
 #' values trade more grid nodes for fewer exact fallbacks and do not change
 #' accuracy.
 #' @param allow.neg.change Logical. sts 1.6 and earlier used
-#' \code{delta < convTol} as the convergence test, so any decrease in the ELBO,
-#' however large, counted as convergence; on the Gadarian data this stopped 3 of
-#' 4 test fits. The default \code{FALSE} instead tracks the best bound seen and
-#' returns that iterate, stopping once the bound has decreased for
-#' \code{patience} consecutive iterations or has stopped changing by more than
-#' \code{convTol}. This can only improve on the bound the old rule returned from
-#' the same stopping point. \code{TRUE} restores the 1.6 stopping rule -- stop
-#' at the first decrease and return the last iterate. (Results from sts 1.6
-#' are not reproduced exactly in any case: 1.7 also changed the kappa update;
-#' see \code{kappaEstimation}.)
-#' @param patience Number of consecutive iterations with a decreasing ELBO
-#' tolerated before stopping, when \code{allow.neg.change = FALSE}; default 5.
-#' The bound is not guaranteed to increase monotonically for this model,
-#' because the AIC step re-selects the lasso penalty at every iteration, and it
-#' can dip for an iteration or two and then rise again. The iterate with the
-#' highest bound is returned whatever the value, so a larger \code{patience}
-#' can only find a later, higher maximum; the cost is up to \code{patience}
-#' iterations past the one returned. With \code{patience = 1}, a fit on the
-#' Gadarian data stopped at iteration 2 on such a dip.
+#' \code{delta < convTol} as the convergence test, where \code{delta} is the
+#' relative change in the bound from one iteration to the next, so any
+#' decrease, however large, counted as convergence. The default \code{FALSE}
+#' tracks the best bound seen, returns that iterate and stops by the windowed
+#' test described under \code{patience}. \code{TRUE} restores the 1.6 rule:
+#' stop at the first decrease (or at an increase smaller than \code{convTol})
+#' and return the last iterate. (Results from sts 1.6 are not reproduced
+#' exactly in any case: 1.7 also changed the kappa update; see
+#' \code{kappaEstimation} and NEWS.)
+#' @param patience Length of the window for the stopping test, when
+#' \code{allow.neg.change = FALSE}; default 20. The fit stops at iteration
+#' \eqn{t} when the best bound so far has improved by less than
+#' \code{convTol}, relative to its absolute value, over the last
+#' \code{patience} iterations, and returns the iterate with the highest
+#' bound. The bound is not monotone for this model: the kappa M-step
+#' maximizes an l1-penalized Poisson approximation of the bound, with the
+#' penalty re-selected by AIC at every iteration, rather than the bound
+#' itself, and the bound can fall for one iteration or many. A test on the
+#' change over a single iteration then stops wherever one step happens to be
+#' small. On the Gadarian data, with three held-out splits and K = 3, 5 and
+#' 10, the windowed test with \code{patience = 20} stopped at iterations
+#' 78-173, a median 11 below the best bound over 300 iterations; sts 1.7.0's
+#' rule (stop when one step changes the bound by less than \code{convTol}
+#' or after 5 consecutive decreases) stopped at iterations 6-59 and once
+#' returned iteration 1. Changed in sts 1.7.1; see NEWS.
 #' @param kappaSolver Solver for the kappa M-step. \code{"cpp"} (default) uses
 #' a dedicated Poisson-lasso solver that exploits the separable structure of the
 #' aggregated design (one two-coefficient problem per topic, sharing the lambda
@@ -145,7 +164,11 @@
 #' \item{kappa}{Estimated kappa coefficients that determine sentiment-discourse and the topic-word distributions} 
 #' \item{sigma_inv}{Inverse of the covariance matrix for the alpha parameters}
 #' \item{sigma}{Covariance matrix for the alpha parameters} 
-#' \item{elbo}{the ELBO at each iteration of the estimation algorithm}
+#' \item{elbo}{the approximate ELBO at each iteration of the estimation
+#' algorithm: the Laplace variational bound of Chen and Mankad (2025),
+#' Proposition 1, summed over documents. sts 1.0 to 1.7.0 reported a different
+#' quantity, whose Laplace term had the wrong sign and half the weight on the
+#' log-determinant of the negative Hessian; see NEWS for 1.7.1.}
 #' \item{converged}{\code{TRUE} if the fit converged, \code{FALSE} if it
 #' stopped at \code{maxIter}}
 #' \item{mv}{the baseline log-transformed occurrence rate of each word in the corpus}
@@ -156,10 +179,14 @@
 #' Gamma for each document}
 #' \item{diagnostics}{A data frame with one row per iteration: the bound
 #' (\code{elbo}), its data-fit and Laplace terms (\code{elboObj},
-#' \code{elboLap}), and the mean relative changes in alpha and kappa
-#' (\code{achange}, \code{kchange}). New in sts 1.7.}
-#' \item{bestIter}{The iteration whose estimates are returned (see
-#' \code{allow.neg.change}). New in sts 1.7.}
+#' \code{elboLap}, where the Laplace term is
+#' \eqn{-\frac{1}{2}\log\det(-H_d)-\frac{1}{2}\log\det\Sigma}{-(1/2) log det(-H_d) - (1/2) log det(Sigma)} summed over documents), the mean relative changes in alpha and kappa
+#' (\code{achange}, \code{kchange}), and the number of documents whose
+#' negative Hessian was not positive definite at the E-step's optimum and was
+#' repaired before inversion (\code{ncholfix}, new in sts 1.7.1). New in sts 1.7.}
+#' \item{bestIter}{The iteration whose estimates are returned: the one with
+#' the highest bound, or the last with \code{allow.neg.change = TRUE}. New in
+#' sts 1.7.}
 #' \item{call}{The matched call. New in sts 1.7.}
 #' 
 #' 
@@ -187,7 +214,7 @@
 #' ## low max iteration number just for testing
 #' sts_estimate <- sts(~ treatment*pid_rep, ~ noTreatment, out, K = 3, maxIter = 1, verbose = FALSE)
 #' @export
-sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2, allow.neg.change = FALSE, patience = 5L, kappaSolver = c("cpp", "glmnet"), cores = getOption("sts.cores", 1L), estepOptimizer = c("bfgs", "newton")) {
+sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500, convTol = 1e-5, initialization = "anchor", kappaEstimation = "lasso", verbose = TRUE, parallelize = FALSE, stmSeed = NULL, logZ = c("auto", "exact", "interpolated"), logZSpacing = 0.01, logZMargin = 2, allow.neg.change = FALSE, patience = 20L, kappaSolver = c("cpp", "glmnet"), cores = getOption("sts.cores", 1L), estepOptimizer = c("bfgs", "newton")) {
   call <- match.call()
   timer_full <- proc.time()[3]
 
@@ -209,6 +236,21 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
   patience <- as.integer(patience)
   kappaSolver <- match.arg(kappaSolver)
   estepOptimizer <- match.arg(estepOptimizer)
+  ## Laplace term of the bound.  The default is the bound of Chen and Mankad
+  ## (2025), Proposition 1.  Internal option sts.bound = "1.6" restores the
+  ## term used by sts 1.0-1.7.0 (wrong sign and half the weight on
+  ## log det(-H)); it changes the reported bound and therefore the stopping
+  ## point and the returned iterate, and is needed only to reproduce those
+  ## releases.
+  boundOpt <- getOption("sts.bound", "laplace")
+  if (!is.character(boundOpt) || length(boundOpt) != 1L || !boundOpt %in% c("laplace", "1.6"))
+    stop("option sts.bound must be \"laplace\" (default) or \"1.6\"", call. = FALSE)
+  boundForm <- if (identical(boundOpt, "1.6")) 1L else 0L
+  ## Gamma update: stm's variational linear regression (default), or least
+  ## squares with the internal option sts.gammaUpdate = "ols" (diagnostics).
+  gammaUpdate <- getOption("sts.gammaUpdate", "vb")
+  if (!is.character(gammaUpdate) || length(gammaUpdate) != 1L || !gammaUpdate %in% c("vb", "ols"))
+    stop('option sts.gammaUpdate must be "vb" (default) or "ols"', call. = FALSE)
   if (!(is.numeric(cores) && length(cores) == 1 && !is.na(cores) && cores >= 1))
     stop("cores must be a single integer >= 1.")
   cores <- as.integer(cores)
@@ -278,7 +320,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
   alpha.est[,1:(K-1)] <- mod.out$eta
   alpha.est[,1:K+K-1] <- matrix(X_seed - mean(X_seed), byrow = FALSE)
   # alpha.est[,1:K+K-1] <- matrix(1, byrow = FALSE)
-  mu <- opt.mu(lambda=alpha.est, covar=cbind(1,X), enet=0, ic.k=NULL, maxits=1000)
+  mu <- opt.mu(lambda=alpha.est, covar=cbind(1,X), enet=0, ic.k=NULL, maxits=1000, method=gammaUpdate)
   Gamma.est <- mu$gamma
   
   ## start sequence to get kappa
@@ -325,14 +367,23 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
   ## of the log-posterior at its mode) and the Laplace term.  1.6 computed the
   ## total only; keeping the parts makes a declining bound diagnosable.
   elboObj_vec <- elboLap_vec <- rep(NA, maxIter)
-  trace_mu <- trace_kap <- matrix(NA_real_, maxIter, 3)
+  ncholfix_vec <- rep(NA_real_, maxIter)
+  trace_mu <- trace_kap <- matrix(NA_real_, maxIter, 4)
   kappaLambda <- NULL
-  ## best-bound tracking and the consecutive-decrease counter (see the
-  ## convergence block below)
+  ## best-bound tracking for the windowed stopping test and the returned
+  ## iterate (see the convergence block below)
   best_elbo  <- -Inf
   best_iter  <- 1L
   best_state <- NULL
-  n_decrease <- 0L
+  best_path  <- rep(NA_real_, maxIter)
+  ## internal option sts.iterHook: function(iter, state) called after each
+  ## iteration with the current estimates as an "STS" object (for example to
+  ## record held-out likelihood along a fit); its values are returned in
+  ## hookTrace
+  iterHook <- getOption("sts.iterHook", NULL)
+  if (!is.null(iterHook) && !is.function(iterHook))
+    stop("option sts.iterHook must be a function(iter, state)", call. = FALSE)
+  hook_trace <- list()
   ntokens <- sum(mod.out$settings$dim$wcounts$x)
   converge <- FALSE
   iter <- 1
@@ -342,23 +393,29 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
   ## objective evaluation (roughly 20 per document per E-step in practice),
   ## while the table sweeps V once per topic per grid node and then
   ## interpolates.  The table therefore pays off when 20*D comfortably
-  ## exceeds the node count, which is a statement about D alone -- V and K
-  ## cancel.  "auto" requires a 4x margin before switching.
-  alpha_s_rng <- range(alpha.est[, 1:K + K - 1])
-  logZnodes_est <- ceiling((diff(alpha_s_rng) + 2 * logZMargin) / logZSpacing) + 1
-  evals_est <- 20 * D
-  logZmode_num <- switch(logZ,
-    exact        = 0L,
-    interpolated = 1L,
-    auto         = if (evals_est > 4 * logZnodes_est) 1L else 0L)
+  ## exceeds the node count -- V and K cancel.  Each topic's grid step is
+  ## min(logZSpacing, 0.1 / S_k), where S_k = max|kappa_s[, k]|, which keeps
+  ## the interpolation error at the same relative size whatever the size of
+  ## kappa_s (sts 1.7.0 used logZSpacing for every topic, and lost accuracy
+  ## once a topic's S_k reached the hundreds).  "auto" decides per topic at
+  ## every E-step: a topic is tabulated when 20*D exceeds 4 times its node
+  ## count and evaluated exactly otherwise.  (1.7.0 decided once, for all
+  ## topics, from the initial range of alpha.)
+  logZMaxhS <- getOption("sts.logZMaxhS", 0.1)
+  if (!(is.numeric(logZMaxhS) && length(logZMaxhS) == 1 && !is.na(logZMaxhS)))
+    stop("option sts.logZMaxhS must be a single number", call. = FALSE)
+  logZmode_num <- switch(logZ, exact = 0L, interpolated = 1L, auto = 2L)
   if (verbose) {
-    if (logZmode_num == 1L) {
-      cat(sprintf("Log-partition: interpolated (h = %g, ~%d nodes; est. %dx fewer V-sweeps).\n",
-                  logZSpacing, logZnodes_est, round(evals_est / logZnodes_est)))
-    } else {
-      cat(sprintf("Log-partition: exact%s.\n",
-                  if (logZ == "auto") " (corpus too small for the table to pay off)" else ""))
-    }
+    alpha_s_rng <- range(alpha.est[, 1:K + K - 1])
+    logZnodes_est <- ceiling((diff(alpha_s_rng) + 2 * logZMargin) / logZSpacing) + 1
+    cat(switch(logZ,
+      exact = "Log-partition: exact.\n",
+      interpolated = sprintf("Log-partition: interpolated (h <= %g, ~%d nodes per topic at the start).\n",
+                             logZSpacing, logZnodes_est),
+      auto = if (20 * D > 4 * logZnodes_est)
+        sprintf("Log-partition: auto (tables with h <= %g at the start, ~%d nodes per topic; decided per topic at each E-step).\n",
+                logZSpacing, logZnodes_est)
+      else "Log-partition: auto (exact at the start: corpus too small for the table to pay off; decided per topic at each E-step).\n"))
   }
 
   if (verbose) {cat("Done.\nStarting Estimation...\n")}
@@ -398,7 +455,9 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
       logZSpacing  = logZSpacing,
       logZMargin   = logZMargin,
       cores        = cores,
-      optimizer    = if (estepOptimizer == "newton") 1L else 0L)
+      optimizer    = if (estepOptimizer == "newton") 1L else 0L,
+      boundForm    = boundForm,
+      logZMaxhS    = logZMaxhS)
 
     alpha.est <- estep$alpha
     sigma.ss  <- estep$sigma_ss
@@ -414,7 +473,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
     
     
     # Now do the maximum likelihood updates 
-    mu <- opt.mu(lambda=alpha.est, covar=cbind(1,X), enet=0, ic.k=NULL, maxits=1000)
+    mu <- opt.mu(lambda=alpha.est, covar=cbind(1,X), enet=0, ic.k=NULL, maxits=1000, method=gammaUpdate)
     Gamma.est <- mu$gamma
     
     sigma <- opt.sigma(nu=sigma.ss, lambda=alpha.est,
@@ -425,7 +484,9 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
     ## Diagnostic trace (internal option sts.traceBound): the bound at fixed
     ## alpha after each M-step update, so a decline can be attributed to the
     ## mu/sigma update or to the kappa update. maxit = 0 evaluates without
-    ## re-optimising alpha.
+    ## re-optimising alpha.  The log-partition is evaluated as in the E-step
+    ## (same logZ mode and spacing; 1.7.0 always evaluated it exactly here,
+    ## so with tables the trace compared exact with interpolated bounds).
     traceB <- isTRUE(getOption("sts.traceBound", FALSE))
     boundAt <- function(kap) {
       r <- sts_estep_cpp(documents = corpus$documents, alpha_init = alpha.est,
@@ -433,9 +494,10 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
              Sigma_Inv = Sigma_Inv.est,
              logdet_sigma = as.numeric(determinant(sigma, logarithm = TRUE)$modulus),
              group = as.integer(group), numGroups = as.integer(numGroups),
-             maxit = 0L, logZMode = 0L, logZSpacing = logZSpacing,
-             logZMargin = logZMargin, cores = cores)
-      c(r$elbo, r$elboObj, r$elboLap)
+             maxit = 0L, logZMode = logZmode_num, logZSpacing = logZSpacing,
+             logZMargin = logZMargin, cores = cores, boundForm = boundForm,
+             logZMaxhS = logZMaxhS)
+      c(r$elbo, r$elboObj, r$elboLap, r$ncholfix)
     }
     if (traceB) trace_mu[iter, ] <- boundAt(kappa.est)
 
@@ -457,7 +519,9 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
     }
     
     elbo_vec[iter] <- elbo
+    best_path[iter] <- if (iter == 1) elbo else max(best_path[iter - 1], elbo)
     elboObj_vec[iter] <- estep$elboObj
+    ncholfix_vec[iter] <- estep$ncholfix
     elboLap_vec[iter] <- estep$elboLap
     if (iter == 1) {
       msg <- sprintf("Completing Iteration %i (approx. per word bound = %.3f) \n", 
@@ -471,43 +535,34 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
       delta <- (new - old)/(0.1 + abs(old))
 
       ## Convergence rule.  Up to sts 1.6 this was `delta < conv_criteria`,
-      ## which treats ANY decrease in the ELBO as convergence, however large:
-      ## a dip of delta = -7e-5 against convTol = 1e-5 stopped the fit.  That
-      ## fired in 3 of 4 Gadarian test runs, so reported iteration counts and
-      ## final bounds from 1.6 and earlier partly reflect premature stops
-      ## rather than convergence.
+      ## which treats ANY decrease in the bound as convergence, however large.
+      ## allow.neg.change = TRUE keeps that rule (and returns the last iterate).
       ##
-      ## Simply allowing the fit to continue past a decrease is NOT the fix.
-      ## On the Gadarian data the bound rises to a single interior maximum and
-      ## then declines monotonically for as long as it is allowed to run: K=3
-      ## with kappaEstimation = "lasso" peaks at iteration 25 and then falls
-      ## for 35 consecutive iterations (-227 by iteration 60), and K=3 with
-      ## the since-removed "adjusted" estimator peaked at iteration 8 and
-      ## fell for 52 (-1554). (Both figures are with the half-step damping
-      ## that 1.7 removed.) So the
-      ## algorithm does not merely dip; past the peak it diverges, and 1.6's
-      ## rule was accidentally stopping one iteration past the best point.
+      ## The default rule allows for a bound that is not monotone. The kappa
+      ## M-step maximizes an l1-penalized Poisson (DMR) approximation of the
+      ## bound with the penalty re-selected by AIC, not the bound itself, so
+      ## the bound rises and falls. With the bound of Chen and Mankad (2025,
+      ## Prop. 1; see NEWS 1.7.1) and the 1.7 defaults, Gadarian fits (three
+      ## held-out splits, K = 3, 5, 10, 300 iterations) decreased in 78-131
+      ## of 299 iterations, starting at iteration 2-4, with decreases about as
+      ## large as increases. On Yelp (K = 10) the bound peaked at iteration 61
+      ## and then fell at every iteration to 110; from the peak on, every kappa
+      ## update lowered it.
       ##
-      ## What is therefore fixed here is which iterate is RETURNED, not the
-      ## stopping test. The best-bound state is tracked and returned, so the
-      ## result can only improve on what the same stopping point gave before
-      ## (+2.09 and +4.40 on the two fits above). Stopping still happens on a
-      ## sustained decrease, after `patience` consecutive decreasing
-      ## iterations, which keeps the fit out of the declining region.
-      ##
-      ## allow.neg.change = TRUE restores 1.6 exactly: stop on the first
-      ## decrease and return the last iterate, not the best one.
-      if (delta < 0) n_decrease <- n_decrease + 1L else n_decrease <- 0L
-      if (delta < 0 && abs(delta) > conv_criteria && !allow.neg.change) {
-        warning(sprintf(paste0("The ELBO decreased at iteration %d ",
-                               "(relative change %.3e). The best iterate so ",
-                               "far (iteration %d) will be returned."),
-                        iter, delta, which.max(elbo_vec[1:iter])), call. = FALSE)
-      }
-      converge <- if (allow.neg.change) {
-        delta < conv_criteria
-      } else {
-        abs(delta) < conv_criteria || n_decrease >= patience
+      ## A single-step test (|delta| < convTol, or `patience` consecutive
+      ## decreases, as in 1.7.0) therefore stops wherever one step happens to
+      ## be small: at iterations 6-59 on those Gadarian fits, once returning
+      ## iteration 1. The test below is on the best bound so far instead: stop
+      ## when it has improved by less than convTol (relative) over the last
+      ## `patience` iterations. With patience = 20 the same fits stopped at
+      ## iterations 78-173, a median 11 below the 300-iteration maximum,
+      ## and Yelp returned its maximum (iteration 61) at iteration 78.
+      ## The best-bound state is tracked and returned.
+      if (allow.neg.change) {
+        converge <- delta < conv_criteria
+      } else if (iter > patience) {
+        old_best <- best_path[iter - patience]
+        converge <- (best_path[iter] - old_best) / (0.1 + abs(old_best)) < conv_criteria
       }
       
       achange <- mean(abs(alpha.est - alpha.est.old)/(0.1 + abs(alpha.est.old)))
@@ -539,6 +594,11 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
       best_state <- list(alpha = alpha.est, gamma = Gamma.est,
                          kappa = kappa.est, sigma_inv = Sigma_Inv.est,
                          sigma = sigma, mu = mu$mu)
+    }
+    if (!is.null(iterHook)) {
+      hook_trace[[iter]] <- iterHook(iter, structure(list(alpha = alpha.est, gamma = Gamma.est,
+        kappa = kappa.est, sigma_inv = Sigma_Inv.est, sigma = sigma, mu = mu$mu, mv = mv,
+        vocab = mod.out$vocab, elbo = elbo_vec[seq_len(iter)]), class = "STS"))
     }
     iter <- iter + 1
   }
@@ -579,15 +639,19 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
     elboObj = elboObj_vec[1:(iter - 1)],
     elboLap = elboLap_vec[1:(iter - 1)],
     achange = achange_vec[1:(iter - 1)],
-    kchange = kchange_vec[1:(iter - 1)])
+    kchange = kchange_vec[1:(iter - 1)],
+    ncholfix = ncholfix_vec[1:(iter - 1)])
   if (isTRUE(getOption("sts.traceBound", FALSE))) {
     final.est$boundTrace <- data.frame(
       iter = seq_len(iter - 1),
       afterE = elbo_path,
       afterMuSigma = trace_mu[1:(iter - 1), 1], afterKappa = trace_kap[1:(iter - 1), 1],
       objAfterMuSigma = trace_mu[1:(iter - 1), 2], objAfterKappa = trace_kap[1:(iter - 1), 2],
-      lapAfterMuSigma = trace_mu[1:(iter - 1), 3], lapAfterKappa = trace_kap[1:(iter - 1), 3])
+      lapAfterMuSigma = trace_mu[1:(iter - 1), 3], lapAfterKappa = trace_kap[1:(iter - 1), 3],
+      ## documents whose -H_d needed the diagonal fix-up in each evaluation
+      cholfixAfterMuSigma = trace_mu[1:(iter - 1), 4], cholfixAfterKappa = trace_kap[1:(iter - 1), 4])
   }
+  if (!is.null(iterHook)) final.est$hookTrace <- hook_trace
   final.est$bestIter <- if (allow.neg.change) length(elbo_path) else best_iter
   final.est$call <- call
   class(final.est) <- "STS"

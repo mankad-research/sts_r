@@ -67,7 +67,8 @@ opt.kappa <- function(phi, alphaS, kappa, estimation = "lasso", numGroups, group
   ## numGroups rows each, coupled only through the shared lambda path and the
   ## joint AIC; the solver reproduces glmnet's lambda_max, grid and dev.ratio
   ## truncation exactly and solves each subproblem to a tighter tolerance than
-  ## glmnet's default thresh = 1e-5. Where it differs from the glmnet path
+  ## the thresh = 1e-5 that sts 1.6 passed to glmnet (glmnet's own default is
+  ## 1e-7). Where it differs from the glmnet path
   ## (about 2% of words on poliblog2k) glmnet refit at thresh = 1e-12 agrees
   ## with it, so the differences are glmnet's convergence error, not the
   ## solver's. solver = "glmnet" keeps the 1.6 code path below.

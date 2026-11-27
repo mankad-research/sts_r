@@ -6,3 +6,4 @@
 ^vignettes/usingSTS\.pdf$
 ^\.github$
 ^benchmarks$
+^vignettes/source$

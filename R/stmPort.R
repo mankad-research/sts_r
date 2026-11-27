@@ -202,14 +202,17 @@ fastAnchor_R <- function(Qbar, K) {
 ## sts 1.7 solves each problem to convergence by projected gradient (step 1/L,
 ## L = 2 * largest eigenvalue of XtX, exact Euclidean projection onto the
 ## simplex). The problem is strictly convex and well conditioned (condition
-## number about 2 on the test corpora), so this converges geometrically and
-## the solution does not depend on rounding. stm and sts 1.1-1.6 used
-## exponentiated gradient with a fixed step eta = 50, which is about 100 times
-## too large for these problems: the iterates oscillate between vertices until
-## the 500-iteration cap, so the weights were neither the least-squares
-## solution nor reproducible across platforms (a 1e-15 perturbation of the
-## inputs could change them by 1). options(sts.recoverL2 = "expgrad") restores
-## that solver, for regression tests against 1.6.
+## number about 1.2-2 on the Gadarian corpus, 7-23 on Yelp and poliblog5k),
+## so this converges geometrically and the solution does not depend on
+## rounding. stm and sts 1.1-1.6 used exponentiated gradient with a fixed
+## step eta = 50, which is stable only below about K / lambda_max(XtX). On the
+## Gadarian corpus that limit is 3.5-12 and the iterates oscillate between
+## vertices until the 500-iteration cap, so the weights were neither the
+## least-squares solution nor reproducible across platforms (a 1e-15
+## perturbation of the inputs could change them by 1). On larger
+## vocabularies (Yelp, poliblog5k) the limit is 170-610 and the old solver
+## converges, though it stops short of the minimum. options(sts.recoverL2 =
+## "expgrad") restores that solver, for regression tests against 1.6.
 ##
 ## The per-word fits run in C++, in parallel over words (src/spectral.cpp);
 ## recoverL2_R() is the R reference used in the tests. Weights that are zero

@@ -1,0 +1,18 @@
+Source of the package vignette.
+
+The vignette is shipped as a pre-built PDF through the R.rsp::asis engine
+(vignettes/vignette.pdf and vignette.pdf.asis), so R CMD build and CRAN
+checks do not run the model fits. This folder is excluded from the build
+(.Rbuildignore).
+
+To rebuild after changing the package or the text, with the package
+installed:
+
+    cd vignettes/source
+    R CMD Sweave usingSTS.Rnw        # runs the code, writes usingSTS.tex
+    pdflatex usingSTS && pdflatex usingSTS
+    cp usingSTS.pdf ../usingSTS.pdf
+    cd .. && make                    # compresses it into ../inst/doc/vignette.pdf
+    cp ../inst/doc/vignette.pdf vignette.pdf
+
+The fits take about a minute on one thread.

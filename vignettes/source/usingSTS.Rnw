@@ -21,7 +21,7 @@
 
 \title{Using the \pkg{sts} Package (Version 1.7.1)}
 \author{Shawn Mankad\\North Carolina State University \and Li Chen\\Cornell University}
-\date{%DATE%}
+\date{November 2026}
 
 \begin{document}
 \maketitle
@@ -76,8 +76,10 @@ variational EM algorithm of \citet{ChenMankad2025}:
 \item \textbf{E-step.} For each document, $\hat{\bm u}_d$ maximizes the
 log-posterior $f_d(\bm u_d)$ (by BFGS), and the variational covariance is
 $(-\bm H_d)^{-1}$, the inverse of the negative Hessian at the mode.
-\item \textbf{M-step for $\bm\Gamma$ and $\bm\Sigma$.} %GAMMA_MSTEP%
-$\bm\Sigma$ is then the average of the documents' covariances plus the spread
+\item \textbf{M-step for $\bm\Gamma$ and $\bm\Sigma$.} Each column of
+$\bm\Gamma$ is estimated by the variational linear regression of \pkg{stm},
+which shrinks the non-intercept coefficients toward zero, of the
+$\hat{\bm u}_d$ on the covariates. $\bm\Sigma$ is then the average of the documents' covariances plus the spread
 of the $\hat{\bm u}_d$ around their fitted means.
 \item \textbf{M-step for $\bm\kappa$.} The expected word counts are
 aggregated within the levels of the initialization variable, and each word's
@@ -145,8 +147,9 @@ fitIters <- length(fit$elbo); fitBest <- fit$bestIter
 fitTime <- round(fit$runtime, 1)
 @
 
-The fit ran \Sexpr{fitIters} iterations in \Sexpr{fitTime} seconds on one
-thread and returns iteration \Sexpr{fitBest}, the one with the highest bound.
+The fit ran \Sexpr{fitIters} iterations (\Sexpr{fitTime} seconds on one
+thread of the machine that built this vignette) and returns iteration
+\Sexpr{fitBest}, the one with the highest bound.
 The main components of the fitted object are:
 \begin{itemize}
 \item \code{alpha}: the $D\times(2K-1)$ matrix of the $\hat{\bm u}_d$
@@ -346,10 +349,13 @@ only through $hS_k$, so this keeps it at the same small relative size when a
 word's coefficient becomes large, as it can on a small corpus fitted for many
 iterations. Values outside the table are computed exactly. The default
 \code{"auto"} decides for each topic at every E-step: it tabulates a topic
-when that is cheaper than summing over the vocabulary for every document, and
-uses the exact sums otherwise. On a corpus of a few hundred documents the
-exact sums are usually cheaper; on tens of thousands the tables are, and the
-saving grows with $D$.
+when that is cheaper than summing over the vocabulary for every document
+(about 20 evaluations each, with a factor of 4 to spare), and uses the exact
+sums otherwise. The break-even point grows with $D$: with the 341 Gadarian
+documents a topic is tabulated while its table needs fewer than about 1,700
+nodes, which holds at the default step and fails once $S_k$ is large; on a
+corpus of tens of thousands of documents the tables are used throughout, and
+the saving grows with $D$.
 
 \paragraph{Initialization.} \code{initialization = "anchor"} (the default)
 initializes the topics by the spectral anchor-word method of
@@ -394,12 +400,13 @@ fit16 <- sts(~ treatment * pid_rep, ~ noTreatment, out, K = 3,
              kappaSolver = "glmnet", logZ = "exact",
              allow.neg.change = TRUE, maxIter = 100)
 @
-and its regression tables, given that fit, with
-\code{options(sts.regnsSigma = "prior")}. The anchor-word initialization and
-the solvers give the same results on every platform; across platforms,
-results can still differ in the last digits, and because AIC selection is
-discontinuous at near-ties, such differences occasionally change the penalty
-chosen for a word.
+\code{options(sts.regnsSigma = "prior")} gives \code{estimateRegns()} the
+covariance of earlier releases, but their tables are not reproduced exactly:
+1.7 fixed a bug in the prevalence tables of 1.6 and earlier, and the random
+stream differs. Results agree across platforms up to rounding, except that
+AIC selection is discontinuous at near-ties, so a rounding difference
+occasionally changes the penalty chosen for a word and, through it, the
+later iterates.
 
 \bibliographystyle{apalike}
 \begin{thebibliography}{}

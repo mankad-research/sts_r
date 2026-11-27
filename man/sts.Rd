@@ -101,14 +101,25 @@ E-step and uses quintic Hermite interpolation thereafter, which reduces the
 per-document cost from \eqn{O(VK)} to \eqn{O(n_d K)} for a document with
 \eqn{n_d} distinct words. Values falling outside the tabulated range are
 evaluated exactly, so no value is ever extrapolated. The default,
-\code{"auto"}, uses the table when the corpus is large enough for it to pay
-off and the exact sum otherwise.}
+\code{"auto"}, decides for each topic at every E-step: it tabulates the
+topic when that is cheaper than summing over the vocabulary for every
+document (about 20 evaluations per document, with a factor of 4 to spare)
+and uses the exact sums otherwise. (sts 1.7.0 decided once, for all
+topics, at the start.)}
 
-\item{logZSpacing}{Grid spacing for \code{logZ = "interpolated"}; default
-0.01. Accuracy is not monotone in this value: the interpolated second
-derivative divides by the square of the spacing, so very fine grids
-eventually lose accuracy to rounding. 0.01 is near the optimum, and 0.02 is
-slightly faster with essentially the same typical accuracy.}
+\item{logZSpacing}{Largest grid step for the interpolated log-partition;
+default 0.01. Topic \eqn{k} uses the step
+\eqn{h_k = \min(}\code{logZSpacing}\eqn{, 0.1/S_k)}{h_k = min(logZSpacing, 0.1/S_k)}, where
+\eqn{S_k = \max_v |\kappa_{s[v,k]}|}{S_k = max |kappa_s[, k]|}: the
+interpolation error depends on the step through \eqn{h S_k} (it is of order
+\eqn{(h S_k)^6} in the value and \eqn{S_k^2 (h S_k)^4} in the second
+derivative), so this keeps it small when a word's coefficient becomes
+large, as it can on small corpora fitted for many iterations. (sts 1.7.0
+used \code{logZSpacing} for every topic.) In our tests the error in
+\eqn{\log Z_k} stayed below about \eqn{10^{-11}} at these steps, for
+\eqn{S_k} from 1 to 400. Accuracy is not monotone in the step: the
+interpolated second derivative divides by the square of the step, so very
+fine grids eventually lose accuracy to rounding.}
 
 \item{logZMargin}{How far beyond the observed range of latent
 sentiment-discourse values to tabulate, in the same units; default 2. Larger
@@ -138,9 +149,9 @@ itself, and the bound can fall for one iteration or many. A test on the
 change over a single iteration then stops wherever one step happens to be
 small. On the Gadarian data, with three held-out splits and K = 3, 5 and
 10, the windowed test with \code{patience = 20} stopped at iterations
-64-163, a median 11 below the best bound over 300 iterations; sts 1.7.0's
+78-173, a median 11 below the best bound over 300 iterations; sts 1.7.0's
 rule (stop when one step changes the bound by less than \code{convTol}
-or after 5 consecutive decreases) stopped at iterations 6-53 and once
+or after 5 consecutive decreases) stopped at iterations 6-59 and once
 returned iteration 1. Changed in sts 1.7.1; see NEWS.}
 
 \item{kappaSolver}{Solver for the kappa M-step. \code{"cpp"} (default) uses
@@ -202,8 +213,10 @@ Gamma for each document}
 \item{diagnostics}{A data frame with one row per iteration: the bound
 (\code{elbo}), its data-fit and Laplace terms (\code{elboObj},
 \code{elboLap}, where the Laplace term is
-\eqn{-\frac{1}{2}\log\det(-H_d)-\frac{1}{2}\log\det\Sigma}{-(1/2) log det(-H_d) - (1/2) log det(Sigma)} summed over documents), and the mean relative changes in alpha and kappa
-(\code{achange}, \code{kchange}). New in sts 1.7.}
+\eqn{-\frac{1}{2}\log\det(-H_d)-\frac{1}{2}\log\det\Sigma}{-(1/2) log det(-H_d) - (1/2) log det(Sigma)} summed over documents), the mean relative changes in alpha and kappa
+(\code{achange}, \code{kchange}), and the number of documents whose
+negative Hessian was not positive definite at the E-step's optimum and was
+repaired before inversion (\code{ncholfix}, new in sts 1.7.1). New in sts 1.7.}
 \item{bestIter}{The iteration whose estimates are returned: the one with
 the highest bound, or the last with \code{allow.neg.change = TRUE}. New in
 sts 1.7.}

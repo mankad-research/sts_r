@@ -24,15 +24,34 @@
 ##       [--lib16=~/Rlib16] [--lib17=~/Rlib17] [--parts=D,K,V,cores,v16,full] \
 ##       [--maxcores=8] [--quick]
 ##
-##   --parts  which experiments to run (default: all of them)
-##     D      per-iteration time vs number of documents (Yelp subsamples), K = 10
-##     K      per-iteration time vs number of topics, D = 10,000
-##     V      per-iteration time vs vocabulary size (prepDocuments lower.thresh)
-##     cores  full Yelp, K = 10, threads 1, 2, 4, ... up to --maxcores
-##     v16    sts 1.6 vs 1.7 on the same subsamples (1.6 is slow: about 15 s
-##            per 1,000 documents per iteration at K = 10)
-##     full   full Yelp fit to convergence with 1.7 defaults (the JSS model)
+##   --parts  which experiments to run (default: D,K,V,cores,v16,full)
+##     D       per-iteration time vs number of documents (Yelp subsamples), K = 10
+##     K       per-iteration time vs number of topics, D = 10,000
+##     V       per-iteration time vs vocabulary size (prepDocuments lower.thresh)
+##     cores   full Yelp, K = 10, threads 1, 2, 4, ... up to --maxcores
+##     v16     sts 1.6 vs 1.7 on the same subsamples (1.6 is slow: about 15 s
+##             per 1,000 documents per iteration at K = 10)
+##     full    full Yelp fit to convergence with 1.7 defaults (the JSS model)
+##   Added for the IJOC paper (sts 1.7.1):
+##     tts     time to a finished fit on the full corpus: 1.7.1 defaults (1 and
+##             --maxcores threads, seeds --seeds) and the 1.6 estimator run in
+##             1.7.1 (the recipe below), each to its own stopping rule. With
+##             --with16full also sts 1.6 itself to its own stop (hours).
+##     matched per-iteration time with the estimator held fixed: sts 1.6
+##             against 1.7.1 running the 1.6 recipe (same iterates), on the
+##             full corpus and the v16 subsamples
+##     ablation the 1.6 recipe in 1.7.1, then each 1.7.1 component in turn:
+##             C++ kappa solver, interpolated log-partition, threads; full
+##             corpus, per-iteration time
+##     Kbig    per-iteration time for K = 10, 25, 50, 100 on the full corpus,
+##             1 and --maxcores threads
+##   --seeds  comma-separated seeds for tts (default 2024,1,2)
 ##   --quick  smaller grids and fewer iterations, to check the setup first
+##
+## The 1.6 recipe (reproduces sts 1.6's iterates in 1.7.1; NEWS, 1.7.1):
+##   options(sts.kappaDamping = 0.5, sts.recoverL2 = "expgrad", sts.bound = "1.6")
+##   sts(..., kappaSolver = "glmnet", logZ = "exact", allow.neg.change = TRUE,
+##       maxIter = 100)
 ##
 ## On a Slurm cluster, one job per part keeps each within a time limit, e.g.
 ##   sbatch --cpus-per-task=8 --mem=16G --time=12:00:00 \
@@ -42,7 +61,7 @@
 ## Per-iteration time is measured as (time for N iterations - time for 1
 ## iteration) / (N - 1), so initialization is excluded; it is reported
 ## separately as the time of the 1-iteration run. Convergence checks are
-## disabled in those runs (convTol = 0) so every run does exactly N iterations.
+## disabled in those runs (convTol = -1e10) so every run does exactly N iterations.
 ## ---------------------------------------------------------------------------
 
 args <- commandArgs(trailingOnly = TRUE)
@@ -73,13 +92,17 @@ if (isTRUE(getarg("worker", FALSE))) {
     corpus$vocab <- corpus$vocab[used]
   }
   is16 <- spec$version == "1.6"
+  if (length(spec$opts)) do.call(options, spec$opts)
   fit_args <- list(prevalence_sentiment = ~ SubPeriod * eliteStatus + stars + meanTemp + sumPrecip + meanWind + city,
                    initializationVar = ~ stars, corpus = corpus, K = spec$K, verbose = FALSE)
-  if (!spec$converge) fit_args$convTol <- 0
+  ## never stop early in timing runs: with convTol = 0, sts 1.6 and
+  ## allow.neg.change = TRUE stop at the first decrease of the bound
+  if (!spec$converge) fit_args$convTol <- -1e10
   if (!is16) {
     fit_args$cores <- spec$cores
-    if (!spec$converge) fit_args$patience <- 1e6L
+    if (!spec$converge && is.null(spec$extra$allow.neg.change)) fit_args$patience <- 1e6L
   }
+  if (length(spec$extra)) fit_args[names(spec$extra)] <- spec$extra
   run <- function(maxIter) {
     set.seed(spec$seed)
     gc(reset = TRUE)
@@ -122,6 +145,10 @@ lib17    <- path.expand(getarg("lib17", "~/Rlib17"))
 parts    <- strsplit(getarg("parts", "D,K,V,cores,v16,full"), ",")[[1]]
 maxcores <- as.integer(getarg("maxcores", parallel::detectCores()))
 quick    <- isTRUE(getarg("quick", FALSE))
+seeds    <- as.integer(strsplit(getarg("seeds", "2024,1,2"), ",")[[1]])
+with16full <- isTRUE(getarg("with16full", FALSE))
+recipe16_opts  <- list(sts.kappaDamping = 0.5, sts.recoverL2 = "expgrad", sts.bound = "1.6")
+recipe16_extra <- list(kappaSolver = "glmnet", logZ = "exact", allow.neg.change = TRUE)
 if (is.null(yelp_csv)) stop("--yelp=/path/to/YelpData.csv is required")
 dir.create(file.path(out_dir, "runs"), recursive = TRUE, showWarnings = FALSE)
 for (l in c(lib16, lib17))
@@ -217,6 +244,48 @@ if ("full" %in% parts) {
   if (maxcores > 1)
     run_spec(sprintf("full_c%d", maxcores), part = "full", version = "1.7", corpus = c30, D = NULL, K = 10,
              cores = maxcores, maxIter = if (quick) 20L else 500L, converge = TRUE, seed = 2024)
+}
+
+if ("tts" %in% parts) {
+  for (sd in seeds) {
+    for (cc in unique(c(1L, maxcores)))
+      run_spec(sprintf("tts_171_c%d_s%d", cc, sd), part = "tts", version = "1.7", corpus = c30, D = NULL, K = 10,
+               cores = cc, maxIter = if (quick) 20L else 500L, converge = TRUE, seed = sd)
+    run_spec(sprintf("tts_recipe16_c1_s%d", sd), part = "tts", version = "1.7", corpus = c30, D = NULL, K = 10,
+             cores = 1L, maxIter = if (quick) 10L else 100L, converge = TRUE, seed = sd,
+             opts = recipe16_opts, extra = recipe16_extra)
+    if (with16full)
+      run_spec(sprintf("tts_16_s%d", sd), part = "tts", version = "1.6", corpus = c30, D = NULL, K = 10,
+               cores = 1L, maxIter = if (quick) 5L else 100L, converge = TRUE, seed = sd)
+  }
+}
+if ("matched" %in% parts) {
+  Ds <- if (quick) 1000 else c(1000, 2000, 5000, 10000, Dall)
+  for (D in Ds) {
+    if (D == Dall || !("v16" %in% parts))
+      run_spec(sprintf("matched_16_D%d", D), part = "matched", version = "1.6", corpus = c30, D = D, subseed = 1,
+               K = 10, cores = 1L, iters = 3L, converge = FALSE, seed = 2024)
+    run_spec(sprintf("matched_recipe16_D%d", D), part = "matched", version = "1.7", corpus = c30, D = D, subseed = 1,
+             K = 10, cores = 1L, iters = if (quick) 3L else 4L, converge = FALSE, seed = 2024,
+             opts = recipe16_opts, extra = recipe16_extra)
+  }
+}
+if ("ablation" %in% parts) {
+  steps <- list(
+    recipe16   = list(opts = recipe16_opts, extra = recipe16_extra, cores = 1L),
+    cppkappa   = list(opts = recipe16_opts, extra = list(kappaSolver = "cpp", logZ = "exact", allow.neg.change = TRUE), cores = 1L),
+    tables     = list(opts = recipe16_opts, extra = list(kappaSolver = "cpp", logZ = "interpolated", allow.neg.change = TRUE), cores = 1L),
+    threads    = list(opts = recipe16_opts, extra = list(kappaSolver = "cpp", logZ = "interpolated", allow.neg.change = TRUE), cores = maxcores),
+    defaults171 = list(opts = list(), extra = list(), cores = maxcores))
+  for (nm in names(steps)) { st <- steps[[nm]]
+    run_spec(sprintf("ablation_%s", nm), part = "ablation", version = "1.7", corpus = c30, D = NULL, K = 10,
+             cores = st$cores, iters = if (quick) 3L else 5L, converge = FALSE, seed = 2024, opts = st$opts, extra = st$extra) }
+}
+if ("Kbig" %in% parts) {
+  Ks <- if (quick) c(10, 25) else c(10, 25, 50, 100)
+  for (K in Ks) for (cc in unique(c(1L, maxcores)))
+    run_spec(sprintf("Kbig_%d_c%d", K, cc), part = "Kbig", version = "1.7", corpus = c30, D = NULL, K = K,
+             cores = cc, iters = 3L, converge = FALSE, seed = 2024)
 }
 
 if (file.exists(results_file)) {

@@ -121,9 +121,9 @@
 #' change over a single iteration then stops wherever one step happens to be
 #' small. On the Gadarian data, with three held-out splits and K = 3, 5 and
 #' 10, the windowed test with \code{patience = 20} stopped at iterations
-#' 64-163, a median 11 below the best bound over 300 iterations; sts 1.7.0's
+#' 78-173, a median 11 below the best bound over 300 iterations; sts 1.7.0's
 #' rule (stop when one step changes the bound by less than \code{convTol}
-#' or after 5 consecutive decreases) stopped at iterations 6-53 and once
+#' or after 5 consecutive decreases) stopped at iterations 6-59 and once
 #' returned iteration 1. Changed in sts 1.7.1; see NEWS.
 #' @param kappaSolver Solver for the kappa M-step. \code{"cpp"} (default) uses
 #' a dedicated Poisson-lasso solver that exploits the separable structure of the
@@ -180,8 +180,10 @@
 #' \item{diagnostics}{A data frame with one row per iteration: the bound
 #' (\code{elbo}), its data-fit and Laplace terms (\code{elboObj},
 #' \code{elboLap}, where the Laplace term is
-#' \eqn{-\frac{1}{2}\log\det(-H_d)-\frac{1}{2}\log\det\Sigma}{-(1/2) log det(-H_d) - (1/2) log det(Sigma)} summed over documents), and the mean relative changes in alpha and kappa
-#' (\code{achange}, \code{kchange}). New in sts 1.7.}
+#' \eqn{-\frac{1}{2}\log\det(-H_d)-\frac{1}{2}\log\det\Sigma}{-(1/2) log det(-H_d) - (1/2) log det(Sigma)} summed over documents), the mean relative changes in alpha and kappa
+#' (\code{achange}, \code{kchange}), and the number of documents whose
+#' negative Hessian was not positive definite at the E-step's optimum and was
+#' repaired before inversion (\code{ncholfix}, new in sts 1.7.1). New in sts 1.7.}
 #' \item{bestIter}{The iteration whose estimates are returned: the one with
 #' the highest bound, or the last with \code{allow.neg.change = TRUE}. New in
 #' sts 1.7.}
@@ -365,7 +367,8 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
   ## of the log-posterior at its mode) and the Laplace term.  1.6 computed the
   ## total only; keeping the parts makes a declining bound diagnosable.
   elboObj_vec <- elboLap_vec <- rep(NA, maxIter)
-  trace_mu <- trace_kap <- matrix(NA_real_, maxIter, 3)
+  ncholfix_vec <- rep(NA_real_, maxIter)
+  trace_mu <- trace_kap <- matrix(NA_real_, maxIter, 4)
   kappaLambda <- NULL
   ## best-bound tracking for the windowed stopping test and the returned
   ## iterate (see the convergence block below)
@@ -494,7 +497,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
              maxit = 0L, logZMode = logZmode_num, logZSpacing = logZSpacing,
              logZMargin = logZMargin, cores = cores, boundForm = boundForm,
              logZMaxhS = logZMaxhS)
-      c(r$elbo, r$elboObj, r$elboLap)
+      c(r$elbo, r$elboObj, r$elboLap, r$ncholfix)
     }
     if (traceB) trace_mu[iter, ] <- boundAt(kappa.est)
 
@@ -518,6 +521,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
     elbo_vec[iter] <- elbo
     best_path[iter] <- if (iter == 1) elbo else max(best_path[iter - 1], elbo)
     elboObj_vec[iter] <- estep$elboObj
+    ncholfix_vec[iter] <- estep$ncholfix
     elboLap_vec[iter] <- estep$elboLap
     if (iter == 1) {
       msg <- sprintf("Completing Iteration %i (approx. per word bound = %.3f) \n", 
@@ -539,20 +543,20 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
       ## bound with the penalty re-selected by AIC, not the bound itself, so
       ## the bound rises and falls. With the bound of Chen and Mankad (2025,
       ## Prop. 1; see NEWS 1.7.1) and the 1.7 defaults, Gadarian fits (three
-      ## held-out splits, K = 3, 5, 10, 300 iterations) decreased in 77-132
+      ## held-out splits, K = 3, 5, 10, 300 iterations) decreased in 78-131
       ## of 299 iterations, starting at iteration 2-4, with decreases about as
-      ## large as increases. On Yelp (K = 10) the bound peaked at iteration 62
+      ## large as increases. On Yelp (K = 10) the bound peaked at iteration 61
       ## and then fell at every iteration to 110; from the peak on, every kappa
       ## update lowered it.
       ##
       ## A single-step test (|delta| < convTol, or `patience` consecutive
       ## decreases, as in 1.7.0) therefore stops wherever one step happens to
-      ## be small: at iterations 6-53 on those Gadarian fits, once returning
+      ## be small: at iterations 6-59 on those Gadarian fits, once returning
       ## iteration 1. The test below is on the best bound so far instead: stop
       ## when it has improved by less than convTol (relative) over the last
       ## `patience` iterations. With patience = 20 the same fits stopped at
-      ## iterations 64-163, a median 11 below the 300-iteration maximum,
-      ## and Yelp returned its maximum (iteration 62) at iteration 78.
+      ## iterations 78-173, a median 11 below the 300-iteration maximum,
+      ## and Yelp returned its maximum (iteration 61) at iteration 78.
       ## The best-bound state is tracked and returned.
       if (allow.neg.change) {
         converge <- delta < conv_criteria
@@ -635,14 +639,17 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
     elboObj = elboObj_vec[1:(iter - 1)],
     elboLap = elboLap_vec[1:(iter - 1)],
     achange = achange_vec[1:(iter - 1)],
-    kchange = kchange_vec[1:(iter - 1)])
+    kchange = kchange_vec[1:(iter - 1)],
+    ncholfix = ncholfix_vec[1:(iter - 1)])
   if (isTRUE(getOption("sts.traceBound", FALSE))) {
     final.est$boundTrace <- data.frame(
       iter = seq_len(iter - 1),
       afterE = elbo_path,
       afterMuSigma = trace_mu[1:(iter - 1), 1], afterKappa = trace_kap[1:(iter - 1), 1],
       objAfterMuSigma = trace_mu[1:(iter - 1), 2], objAfterKappa = trace_kap[1:(iter - 1), 2],
-      lapAfterMuSigma = trace_mu[1:(iter - 1), 3], lapAfterKappa = trace_kap[1:(iter - 1), 3])
+      lapAfterMuSigma = trace_mu[1:(iter - 1), 3], lapAfterKappa = trace_kap[1:(iter - 1), 3],
+      ## documents whose -H_d needed the diagonal fix-up in each evaluation
+      cholfixAfterMuSigma = trace_mu[1:(iter - 1), 4], cholfixAfterKappa = trace_kap[1:(iter - 1), 4])
   }
   if (!is.null(iterHook)) final.est$hookTrace <- hook_trace
   final.est$bestIter <- if (allow.neg.change) length(elbo_path) else best_iter

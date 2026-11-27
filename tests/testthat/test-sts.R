@@ -146,8 +146,8 @@ test_that("internal options: least-squares Gamma and the iteration hook", {
                  sts.iterHook = function(iter, st) c(iter, length(st$elbo)))
   on.exit(options(old))
   set.seed(2024)
-  f <- sts(~ treatment * pid_rep, ~ noTreatment, cp, K = 3, maxIter = 3,
-           allow.neg.change = TRUE, convTol = -1, verbose = FALSE)
+  f <- suppressWarnings(sts(~ treatment * pid_rep, ~ noTreatment, cp, K = 3, maxIter = 3,
+                            allow.neg.change = TRUE, convTol = -1, verbose = FALSE))
   X <- cbind(1, model.matrix(~ treatment * pid_rep, cp$meta)[, -1])
   expect_equal(unname(f$gamma), unname(qr.coef(qr(X), f$alpha)), tolerance = 1e-10)
   expect_equal(f$hookTrace, lapply(1:3, function(i) c(i, i)))

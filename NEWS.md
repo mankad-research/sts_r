@@ -54,6 +54,58 @@
 * `allow.neg.change = TRUE` still restores 1.6's rule: stop at the first
   decrease and return the last iterate.
 
+## Accuracy of the interpolated log-partition functions
+
+* With `logZ = "interpolated"` or `"auto"`, each topic's table now has its
+  own step, min(`logZSpacing`, 0.1 / S_k), where S_k is the largest
+  |kappa_s| of topic k. The interpolation error depends on the step only
+  through h S_k (it is of order (h S_k)^6 in the value), and 1.7.0 used the
+  same step for every topic. That was accurate while S_k was of order 1-10,
+  as on the Yelp example (S about 4), but S_k can reach the hundreds when a
+  rare word's coefficient grows on a small corpus fitted for many
+  iterations: on Gadarian fits run for 300 iterations S reached 100-430,
+  and at S = 409 the 1.7.0 tables were off by 0.53 in the bound and by up
+  to 4e-3 in alpha. With the new step the same state is accurate to about
+  1e-8 in the bound and 1e-10 in alpha.
+* `logZ = "auto"` now decides for each topic at every E-step whether to
+  tabulate it (when the table is cheaper than summing over the vocabulary
+  for every document, as estimated by 1.7.0's rule) or to use the exact
+  sums. 1.7.0 decided once, for all topics, from the initial range of alpha.
+  On large corpora nothing changes; on small ones a topic with a large S_k
+  is evaluated exactly.
+* The internal option `options(sts.logZMaxhS = 0)` restores the 1.7.0
+  spacing.
+* The internal diagnostic `options(sts.traceBound = TRUE)` now evaluates the
+  bound after each M-step update with the same log-partition backend as the
+  E-step. 1.7.0 always evaluated it exactly there, so with tables the trace
+  compared exact with interpolated bounds.
+
+## `estimateRegns()` uses stm's covariance for the draws
+
+* The document-level variables are now drawn with the average of the
+  documents' variational covariances, Sigma - (1/D) sum_d (alpha_d -
+  mu_d)(alpha_d - mu_d)', which is the "Global" approximation that stm's
+  `estimateEffect()` uses. Up to 1.7.0 they were drawn with `sigma`, the
+  prior covariance, which also contains the spread of the documents around
+  their fitted means; it overstated the uncertainty, so standard errors
+  were too large. With the new draws the standard errors of the covariate
+  effects are a median 3-9% smaller on the Gadarian data (K = 3, 5) and
+  17-18% smaller on the Yelp example of the package paper (K = 10; range
+  4-25%); the estimates change only by simulation noise.
+  `options(sts.regnsSigma = "prior")` restores the old draws.
+
+## Package
+
+* `esthcpp()`, `lgaecpp()` and `lpbdcpp()` are no longer exported. They
+  were the R-callable C++ routines of sts 1.6's E-step (the Hessian, the
+  gradient and the objective of one document), which 1.7 replaced; nothing
+  in the package calls them, and the tests keep them as reference
+  implementations.
+* The vignette has been rewritten for 1.7.1: the model, the workflow on the
+  Gadarian data, convergence and the stopping rule, the estimation settings,
+  and how to reproduce earlier releases. Its source is in
+  `vignettes/source/`.
+
 # sts 1.7
 
 Version 1.7 makes estimation much faster; changes the kappa update, the

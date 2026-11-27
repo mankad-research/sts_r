@@ -46,8 +46,8 @@ test_that("the bound is the Laplace ELBO of Chen and Mankad (2025), Proposition 
   ref_obj <- ref_ld <- 0
   for (d in seq_along(cp$documents)) {
     doc <- cp$documents[[d]]; a <- r$alpha[d, ]
-    ref_obj <- ref_obj + lpbdcpp(a, f$sigma_inv, f$kappa$kappa_t, f$kappa$kappa_s, f$mu[, d], doc, V, f$mv)
-    H <- esthcpp(a, f$kappa$kappa_t, f$kappa$kappa_s, f$sigma_inv, doc, V, f$mv)
+    ref_obj <- ref_obj + sts:::lpbdcpp(a, f$sigma_inv, f$kappa$kappa_t, f$kappa$kappa_s, f$mu[, d], doc, V, f$mv)
+    H <- sts:::esthcpp(a, f$kappa$kappa_t, f$kappa$kappa_s, f$sigma_inv, doc, V, f$mv)
     ref_ld <- ref_ld + as.numeric(determinant(H, logarithm = TRUE)$modulus)
   }
   D <- length(cp$documents)

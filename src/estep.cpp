@@ -44,7 +44,8 @@ using namespace sts;
 // [[Rcpp::export]]
 Rcpp::List sts_logZ_probe(const arma::mat& kappa_t, const arma::mat& kappa_s,
                           const arma::vec& mv, const arma::vec& avals,
-                          int mode, double a_lo, double a_hi, double spacing) {
+                          int mode, double a_lo, double a_hi, double spacing,
+                          double max_hS = 0.0, double max_nodes = 0.0) {
   const arma::uword V = mv.n_elem, K = kappa_t.n_cols, n = avals.n_elem;
   arma::mat lin_base(V, K);
   for (arma::uword k = 0; k < K; ++k) lin_base.col(k) = mv + kappa_t.col(k);
@@ -52,6 +53,7 @@ Rcpp::List sts_logZ_probe(const arma::mat& kappa_t, const arma::mat& kappa_s,
   ExactNormalizer ex(lin_base, kappa_s);
   arma::mat f(n, K), d1(n, K), d2(n, K);
   double nodes = NA_REAL, lo = NA_REAL, hi = NA_REAL, nout = NA_REAL;
+  arma::vec hk(K); hk.fill(NA_REAL);
 
   if (mode == 0) {
     for (arma::uword i = 0; i < n; ++i)
@@ -60,7 +62,7 @@ Rcpp::List sts_logZ_probe(const arma::mat& kappa_t, const arma::mat& kappa_s,
         f(i, k) = t.f; d1(i, k) = t.d1; d2(i, k) = t.d2;
       }
   } else {
-    HermiteNormalizer hm(lin_base, kappa_s, a_lo, a_hi, spacing);
+    HermiteNormalizer hm(lin_base, kappa_s, a_lo, a_hi, spacing, 1, max_hS, max_nodes);
     for (arma::uword i = 0; i < n; ++i)
       for (arma::uword k = 0; k < K; ++k) {
         const LogZTriple t = hm.eval(k, avals[i]);
@@ -68,12 +70,14 @@ Rcpp::List sts_logZ_probe(const arma::mat& kappa_t, const arma::mat& kappa_s,
       }
     nodes = (double)hm.n_nodes(); lo = hm.range_lo(); hi = hm.range_hi();
     nout = (double)hm.n_outside();
+    hk = hm.spacing_by_topic();
   }
 
   return Rcpp::List::create(
     Rcpp::Named("f") = f, Rcpp::Named("d1") = d1, Rcpp::Named("d2") = d2,
     Rcpp::Named("n_nodes") = nodes, Rcpp::Named("lo") = lo,
-    Rcpp::Named("hi") = hi, Rcpp::Named("n_outside") = nout);
+    Rcpp::Named("hi") = hi, Rcpp::Named("n_outside") = nout,
+    Rcpp::Named("spacing") = hk);
 }
 
 // --------------------------------------------------------------------------
@@ -500,7 +504,8 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
                          double logZMargin,
                          int cores = 1,
                          int optimizer = 0,
-                         int boundForm = 0) {
+                         int boundForm = 0,
+                         double logZMaxhS = 0.1) {
   const arma::uword D = documents.size();
   const arma::uword V = mv.n_elem;
   const arma::uword K = kappa_t.n_cols;
@@ -520,24 +525,34 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
   arma::mat lin_base(V, K);
   for (arma::uword k = 0; k < K; ++k) lin_base.col(k) = mv + kappa_t.col(k);
 
-  // Normalizer backend.  logZMode 0 keeps the exact pass over V; mode 1
-  // tabulates logZ, logZ' and logZ'' once for this E-step over the range of
-  // alpha_s the documents currently occupy, padded by logZMargin, and
-  // interpolates.  Anything outside the table still goes to the exact
+  // Normalizer backend.  logZMode 0 keeps the exact pass over V; modes 1
+  // and 2 tabulate logZ, logZ' and logZ'' once for this E-step over the range
+  // of alpha_s the documents currently occupy, padded by logZMargin, and
+  // interpolate.  Anything outside the table still goes to the exact
   // backend, so no value is ever extrapolated.  (The table is built before
   // the parallel region; lookups are read-only.)
+  //
+  // Each topic's grid step is min(logZSpacing, logZMaxhS / S_k), with
+  // S_k = max|kappa_s[, k]|, so that the error is controlled whatever the
+  // size of kappa_s (see hermite.h).  Mode 2 ("auto") then tabulates a topic
+  // only if its table is cheaper than summing over V: about 20 evaluations
+  // per document, with a 4x margin, as 1.7.0 decided once for all topics.
+  // Mode 1 ("interpolated") tabulates every topic, up to 2^20 nodes.
   double a_lo = 0.0, a_hi = 0.0;
-  if (logZMode == 1) {
+  if (logZMode == 1 || logZMode == 2) {
     const arma::mat as = alpha_init.cols(K - 1, P - 1);
     a_lo = as.min() - logZMargin;
     a_hi = as.max() + logZMargin;
   }
+  if (logZMode < 0 || logZMode > 2) Rcpp::stop("logZMode must be 0, 1 or 2");
+  const double max_nodes = (logZMode == 2) ? 20.0 * (double)D / 4.0 : 1048576.0;
   ExactNormalizer   nrm_exact(lin_base, kappa_s);
   std::unique_ptr<HermiteNormalizer> nrm_herm;
-  if (logZMode == 1) {
-    nrm_herm.reset(new HermiteNormalizer(lin_base, kappa_s, a_lo, a_hi, logZSpacing, cores));
+  if (logZMode != 0) {
+    nrm_herm.reset(new HermiteNormalizer(lin_base, kappa_s, a_lo, a_hi, logZSpacing, cores,
+                                         logZMaxhS, max_nodes));
   }
-  const Normalizer& nrm = (logZMode == 1)
+  const Normalizer& nrm = (logZMode != 0)
       ? static_cast<const Normalizer&>(*nrm_herm)
       : static_cast<const Normalizer&>(nrm_exact);
 
@@ -588,6 +603,9 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
   Rcpp::List phi_out(numGroups);
   for (int g = 0; g < numGroups; ++g) phi_out[g] = phi[g];
 
+  arma::vec hk_out(K); hk_out.fill(NA_REAL);
+  if (logZMode != 0) hk_out = nrm_herm->spacing_by_topic();
+
   return Rcpp::List::create(
     Rcpp::Named("alpha")    = alpha,
     Rcpp::Named("elbo")     = elbo,
@@ -602,8 +620,10 @@ Rcpp::List sts_estep_cpp(const Rcpp::List& documents,
     Rcpp::Named("nfail")    = (double)nfail,
     Rcpp::Named("ncholfix") = (double)ncholfix,
     Rcpp::Named("nNewtonFallback") = (double)nfallback,
-    Rcpp::Named("logZNodes")   = logZMode == 1 ? (double)nrm_herm->n_nodes() : NA_REAL,
-    Rcpp::Named("logZOutside") = logZMode == 1 ? (double)nrm_herm->n_outside() : NA_REAL,
-    Rcpp::Named("logZLo")      = logZMode == 1 ? a_lo : NA_REAL,
-    Rcpp::Named("logZHi")      = logZMode == 1 ? a_hi : NA_REAL);
+    Rcpp::Named("logZNodes")   = logZMode != 0 ? (double)nrm_herm->n_nodes() : NA_REAL,
+    Rcpp::Named("logZOutside") = logZMode != 0 ? (double)nrm_herm->n_outside() : NA_REAL,
+    Rcpp::Named("logZLo")      = logZMode != 0 ? a_lo : NA_REAL,
+    Rcpp::Named("logZHi")      = logZMode != 0 ? a_hi : NA_REAL,
+    Rcpp::Named("logZSpacingByTopic") = hk_out,
+    Rcpp::Named("logZExactTopics") = logZMode != 0 ? (double)nrm_herm->n_exact_topics() : (double)K);
 }

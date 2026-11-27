@@ -33,7 +33,7 @@ gad_groups <- function(cp) {
 
 ## Arguments for one E-step (sts_estep_cpp) at the state of a fitted model.
 estep_args <- function(fit, cp, logZMode = 0L, cores = 1L, optimizer = 0L, maxit = 500L,
-                       boundForm = 0L) {
+                       boundForm = 0L, logZMaxhS = 0.1) {
   g <- gad_groups(cp)
   list(documents = cp$documents, alpha_init = fit$alpha,
        kappa_t = fit$kappa$kappa_t, kappa_s = fit$kappa$kappa_s, mv = fit$mv,
@@ -42,6 +42,6 @@ estep_args <- function(fit, cp, logZMode = 0L, cores = 1L, optimizer = 0L, maxit
        group = g$group, numGroups = as.integer(g$numGroups), maxit = as.integer(maxit),
        logZMode = as.integer(logZMode), logZSpacing = 0.01, logZMargin = 2,
        cores = as.integer(cores), optimizer = as.integer(optimizer),
-       boundForm = as.integer(boundForm))
+       boundForm = as.integer(boundForm), logZMaxhS = logZMaxhS)
 }
 run_estep <- function(...) do.call(sts:::sts_estep_cpp, estep_args(...))

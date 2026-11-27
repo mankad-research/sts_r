@@ -108,6 +108,25 @@ test_that("estimateRegns() returns an STSRegns object with working methods", {
   expect_equal(sum(cf["Intercept", 1:3]), 1, tolerance = 0.02)
 })
 
+test_that("estimateRegns() draws with the average variational covariance, as stm does", {
+  f <- gad_fit(); cp <- gad_corpus(); D <- nrow(f$alpha)
+  S <- sts:::.regns_sigma(f)
+  ## Sigma = (crossprod(alpha - mu) + sum_d Upsilon_d) / D, so this is the
+  ## average of the documents' covariances (stm's "Global" approximation)
+  expect_equal(S, f$sigma - crossprod(f$alpha - t(f$mu)) / D)
+  expect_gt(min(eigen(S, symmetric = TRUE, only.values = TRUE)$values), 0)
+  expect_gt(min(eigen(f$sigma - S, symmetric = TRUE, only.values = TRUE)$values), -1e-10)
+  ## the prior covariance of sts <= 1.7.0 overstates the uncertainty
+  set.seed(9); r <- estimateRegns(f, ~ treatment * pid_rep, cp, nsims = 5, nsims_se = 50)
+  old <- options(sts.regnsSigma = "prior"); on.exit(options(old))
+  expect_identical(sts:::.regns_sigma(f), f$sigma)
+  set.seed(9); r0 <- estimateRegns(f, ~ treatment * pid_rep, cp, nsims = 5, nsims_se = 50)
+  se <- function(x) sapply(x, function(t) t[, "Std. Error"])
+  expect_lt(mean(se(r)), mean(se(r0)))
+  options(sts.regnsSigma = "bad")
+  expect_error(estimateRegns(f, ~ treatment, cp), "sts.regnsSigma")
+})
+
 test_that("functions reject objects that are not STS fits", {
   cp <- gad_corpus()
   expect_error(printTopWords(list(a = 1)), "must be a model fitted by sts")

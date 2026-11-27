@@ -77,13 +77,24 @@
 #' per-document cost from \eqn{O(VK)} to \eqn{O(n_d K)} for a document with
 #' \eqn{n_d} distinct words. Values falling outside the tabulated range are
 #' evaluated exactly, so no value is ever extrapolated. The default,
-#' \code{"auto"}, uses the table when the corpus is large enough for it to pay
-#' off and the exact sum otherwise.
-#' @param logZSpacing Grid spacing for \code{logZ = "interpolated"}; default
-#' 0.01. Accuracy is not monotone in this value: the interpolated second
-#' derivative divides by the square of the spacing, so very fine grids
-#' eventually lose accuracy to rounding. 0.01 is near the optimum, and 0.02 is
-#' slightly faster with essentially the same typical accuracy.
+#' \code{"auto"}, decides for each topic at every E-step: it tabulates the
+#' topic when that is cheaper than summing over the vocabulary for every
+#' document (about 20 evaluations per document, with a factor of 4 to spare)
+#' and uses the exact sums otherwise. (sts 1.7.0 decided once, for all
+#' topics, at the start.)
+#' @param logZSpacing Largest grid step for the interpolated log-partition;
+#' default 0.01. Topic \eqn{k} uses the step
+#' \eqn{h_k = \min(}\code{logZSpacing}\eqn{, 0.1/S_k)}{h_k = min(logZSpacing, 0.1/S_k)}, where
+#' \eqn{S_k = \max_v |\kappa_{s[v,k]}|}{S_k = max |kappa_s[, k]|}: the
+#' interpolation error depends on the step through \eqn{h S_k} (it is of order
+#' \eqn{(h S_k)^6} in the value and \eqn{S_k^2 (h S_k)^4} in the second
+#' derivative), so this keeps it small when a word's coefficient becomes
+#' large, as it can on small corpora fitted for many iterations. (sts 1.7.0
+#' used \code{logZSpacing} for every topic.) In our tests the error in
+#' \eqn{\log Z_k} stayed below about \eqn{10^{-11}} at these steps, for
+#' \eqn{S_k} from 1 to 400. Accuracy is not monotone in the step: the
+#' interpolated second derivative divides by the square of the step, so very
+#' fine grids eventually lose accuracy to rounding.
 #' @param logZMargin How far beyond the observed range of latent
 #' sentiment-discourse values to tabulate, in the same units; default 2. Larger
 #' values trade more grid nodes for fewer exact fallbacks and do not change
@@ -233,6 +244,11 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
   if (!is.character(boundOpt) || length(boundOpt) != 1L || !boundOpt %in% c("laplace", "1.6"))
     stop("option sts.bound must be \"laplace\" (default) or \"1.6\"", call. = FALSE)
   boundForm <- if (identical(boundOpt, "1.6")) 1L else 0L
+  ## Gamma update: stm's variational linear regression (default), or least
+  ## squares with the internal option sts.gammaUpdate = "ols" (diagnostics).
+  gammaUpdate <- getOption("sts.gammaUpdate", "vb")
+  if (!is.character(gammaUpdate) || length(gammaUpdate) != 1L || !gammaUpdate %in% c("vb", "ols"))
+    stop('option sts.gammaUpdate must be "vb" (default) or "ols"', call. = FALSE)
   if (!(is.numeric(cores) && length(cores) == 1 && !is.na(cores) && cores >= 1))
     stop("cores must be a single integer >= 1.")
   cores <- as.integer(cores)
@@ -302,7 +318,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
   alpha.est[,1:(K-1)] <- mod.out$eta
   alpha.est[,1:K+K-1] <- matrix(X_seed - mean(X_seed), byrow = FALSE)
   # alpha.est[,1:K+K-1] <- matrix(1, byrow = FALSE)
-  mu <- opt.mu(lambda=alpha.est, covar=cbind(1,X), enet=0, ic.k=NULL, maxits=1000)
+  mu <- opt.mu(lambda=alpha.est, covar=cbind(1,X), enet=0, ic.k=NULL, maxits=1000, method=gammaUpdate)
   Gamma.est <- mu$gamma
   
   ## start sequence to get kappa
@@ -357,6 +373,14 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
   best_iter  <- 1L
   best_state <- NULL
   best_path  <- rep(NA_real_, maxIter)
+  ## internal option sts.iterHook: function(iter, state) called after each
+  ## iteration with the current estimates as an "STS" object (for example to
+  ## record held-out likelihood along a fit); its values are returned in
+  ## hookTrace
+  iterHook <- getOption("sts.iterHook", NULL)
+  if (!is.null(iterHook) && !is.function(iterHook))
+    stop("option sts.iterHook must be a function(iter, state)", call. = FALSE)
+  hook_trace <- list()
   ntokens <- sum(mod.out$settings$dim$wcounts$x)
   converge <- FALSE
   iter <- 1
@@ -366,24 +390,29 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
   ## objective evaluation (roughly 20 per document per E-step in practice),
   ## while the table sweeps V once per topic per grid node and then
   ## interpolates.  The table therefore pays off when 20*D comfortably
-  ## exceeds the node count, which depends on D and on the initial alpha
-  ## range (decided once, here) -- V and K cancel.  "auto" requires a 4x
-  ## margin before switching.
-  alpha_s_rng <- range(alpha.est[, 1:K + K - 1])
-  logZnodes_est <- ceiling((diff(alpha_s_rng) + 2 * logZMargin) / logZSpacing) + 1
-  evals_est <- 20 * D
-  logZmode_num <- switch(logZ,
-    exact        = 0L,
-    interpolated = 1L,
-    auto         = if (evals_est > 4 * logZnodes_est) 1L else 0L)
+  ## exceeds the node count -- V and K cancel.  Each topic's grid step is
+  ## min(logZSpacing, 0.1 / S_k), where S_k = max|kappa_s[, k]|, which keeps
+  ## the interpolation error at the same relative size whatever the size of
+  ## kappa_s (sts 1.7.0 used logZSpacing for every topic, and lost accuracy
+  ## once a topic's S_k reached the hundreds).  "auto" decides per topic at
+  ## every E-step: a topic is tabulated when 20*D exceeds 4 times its node
+  ## count and evaluated exactly otherwise.  (1.7.0 decided once, for all
+  ## topics, from the initial range of alpha.)
+  logZMaxhS <- getOption("sts.logZMaxhS", 0.1)
+  if (!(is.numeric(logZMaxhS) && length(logZMaxhS) == 1 && !is.na(logZMaxhS)))
+    stop("option sts.logZMaxhS must be a single number", call. = FALSE)
+  logZmode_num <- switch(logZ, exact = 0L, interpolated = 1L, auto = 2L)
   if (verbose) {
-    if (logZmode_num == 1L) {
-      cat(sprintf("Log-partition: interpolated (h = %g, ~%d nodes; est. %dx fewer V-sweeps).\n",
-                  logZSpacing, logZnodes_est, round(evals_est / logZnodes_est)))
-    } else {
-      cat(sprintf("Log-partition: exact%s.\n",
-                  if (logZ == "auto") " (corpus too small for the table to pay off)" else ""))
-    }
+    alpha_s_rng <- range(alpha.est[, 1:K + K - 1])
+    logZnodes_est <- ceiling((diff(alpha_s_rng) + 2 * logZMargin) / logZSpacing) + 1
+    cat(switch(logZ,
+      exact = "Log-partition: exact.\n",
+      interpolated = sprintf("Log-partition: interpolated (h <= %g, ~%d nodes per topic at the start).\n",
+                             logZSpacing, logZnodes_est),
+      auto = if (20 * D > 4 * logZnodes_est)
+        sprintf("Log-partition: auto (tables with h <= %g at the start, ~%d nodes per topic; decided per topic at each E-step).\n",
+                logZSpacing, logZnodes_est)
+      else "Log-partition: auto (exact at the start: corpus too small for the table to pay off; decided per topic at each E-step).\n"))
   }
 
   if (verbose) {cat("Done.\nStarting Estimation...\n")}
@@ -424,7 +453,8 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
       logZMargin   = logZMargin,
       cores        = cores,
       optimizer    = if (estepOptimizer == "newton") 1L else 0L,
-      boundForm    = boundForm)
+      boundForm    = boundForm,
+      logZMaxhS    = logZMaxhS)
 
     alpha.est <- estep$alpha
     sigma.ss  <- estep$sigma_ss
@@ -440,7 +470,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
     
     
     # Now do the maximum likelihood updates 
-    mu <- opt.mu(lambda=alpha.est, covar=cbind(1,X), enet=0, ic.k=NULL, maxits=1000)
+    mu <- opt.mu(lambda=alpha.est, covar=cbind(1,X), enet=0, ic.k=NULL, maxits=1000, method=gammaUpdate)
     Gamma.est <- mu$gamma
     
     sigma <- opt.sigma(nu=sigma.ss, lambda=alpha.est,
@@ -451,7 +481,9 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
     ## Diagnostic trace (internal option sts.traceBound): the bound at fixed
     ## alpha after each M-step update, so a decline can be attributed to the
     ## mu/sigma update or to the kappa update. maxit = 0 evaluates without
-    ## re-optimising alpha.
+    ## re-optimising alpha.  The log-partition is evaluated as in the E-step
+    ## (same logZ mode and spacing; 1.7.0 always evaluated it exactly here,
+    ## so with tables the trace compared exact with interpolated bounds).
     traceB <- isTRUE(getOption("sts.traceBound", FALSE))
     boundAt <- function(kap) {
       r <- sts_estep_cpp(documents = corpus$documents, alpha_init = alpha.est,
@@ -459,8 +491,9 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
              Sigma_Inv = Sigma_Inv.est,
              logdet_sigma = as.numeric(determinant(sigma, logarithm = TRUE)$modulus),
              group = as.integer(group), numGroups = as.integer(numGroups),
-             maxit = 0L, logZMode = 0L, logZSpacing = logZSpacing,
-             logZMargin = logZMargin, cores = cores, boundForm = boundForm)
+             maxit = 0L, logZMode = logZmode_num, logZSpacing = logZSpacing,
+             logZMargin = logZMargin, cores = cores, boundForm = boundForm,
+             logZMaxhS = logZMaxhS)
       c(r$elbo, r$elboObj, r$elboLap)
     }
     if (traceB) trace_mu[iter, ] <- boundAt(kappa.est)
@@ -558,6 +591,11 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
                          kappa = kappa.est, sigma_inv = Sigma_Inv.est,
                          sigma = sigma, mu = mu$mu)
     }
+    if (!is.null(iterHook)) {
+      hook_trace[[iter]] <- iterHook(iter, structure(list(alpha = alpha.est, gamma = Gamma.est,
+        kappa = kappa.est, sigma_inv = Sigma_Inv.est, sigma = sigma, mu = mu$mu, mv = mv,
+        vocab = mod.out$vocab, elbo = elbo_vec[seq_len(iter)]), class = "STS"))
+    }
     iter <- iter + 1
   }
 
@@ -606,6 +644,7 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
       objAfterMuSigma = trace_mu[1:(iter - 1), 2], objAfterKappa = trace_kap[1:(iter - 1), 2],
       lapAfterMuSigma = trace_mu[1:(iter - 1), 3], lapAfterKappa = trace_kap[1:(iter - 1), 3])
   }
+  if (!is.null(iterHook)) final.est$hookTrace <- hook_trace
   final.est$bestIter <- if (allow.neg.change) length(elbo_path) else best_iter
   final.est$call <- call
   class(final.est) <- "STS"

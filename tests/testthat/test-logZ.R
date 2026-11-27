@@ -62,3 +62,53 @@ test_that("values outside the interpolation range fall back to the exact backend
   expect_identical(hm$d1, ex$d1)
   expect_identical(hm$d2, ex$d2)
 })
+
+## sts 1.7.1: each topic's grid step is min(spacing, max_hS / S_k). With one
+## spacing for every topic (1.7.0) the error grows like (h S_k)^6, and S_k
+## reaches the hundreds on small corpora run for many iterations.
+big_kappa <- function(S = 400, at = 0.5) {
+  f <- gad_fit(); kt <- f$kappa$kappa_t; ks <- f$kappa$kappa_s; mv <- f$mv
+  ## one word whose kappa_s is S, placed so that it starts to dominate topic 1
+  ## near a = `at`, which is where logZ_1 changes curvature over a width 1/S
+  z <- sts:::sts_logZ_probe(kt, ks, mv, at, 0L, -3, 3, 0.01)$f[1, 1]
+  ks[1, 1] <- S; kt[1, 1] <- z - mv[1] - S * at
+  list(kt = kt, ks = ks, mv = mv, S = S, fit = f)
+}
+
+test_that("the tables stay accurate when one word's kappa_s is in the hundreds", {
+  b <- big_kappa()
+  set.seed(1); a <- c(seq(0.4, 0.6, length.out = 2001), runif(500, -2.5, 2.5))
+  ex  <- sts:::sts_logZ_probe(b$kt, b$ks, b$mv, a, 0L, -3, 3, 0.01)
+  old <- sts:::sts_logZ_probe(b$kt, b$ks, b$mv, a, 1L, -3, 3, 0.01)
+  new <- sts:::sts_logZ_probe(b$kt, b$ks, b$mv, a, 1L, -3, 3, 0.01, max_hS = 0.1)
+  Sk <- apply(abs(b$ks), 2, max)
+  expect_equal(as.vector(new$spacing), pmin(0.01, 0.1 / Sk))
+  expect_equal(as.vector(old$spacing), rep(0.01, ncol(b$ks)))
+  ## errors in logZ, logZ' / S and logZ'' / S^2 for the topic with large S
+  err <- function(p) c(max(abs(p$f[, 1] - ex$f[, 1])), max(abs(p$d1[, 1] - ex$d1[, 1])) / b$S,
+                       max(abs(p$d2[, 1] - ex$d2[, 1])) / b$S^2)
+  expect_gt(err(old)[1], 1e-4)       # the 1.7.0 tables
+  e <- err(new)
+  expect_lt(e[1], 1e-10)
+  expect_lt(e[2], 1e-8)
+  expect_lt(e[3], 1e-7)
+  ## the other topics are unchanged
+  expect_identical(new$f[, -1], old$f[, -1])
+})
+
+test_that("auto evaluates a topic exactly when its table would cost more", {
+  b <- big_kappa(); cp <- gad_corpus(); f <- b$fit
+  f$kappa$kappa_t <- b$kt; f$kappa$kappa_s <- b$ks
+  ex <- run_estep(f, cp, logZMode = 0L, maxit = 0L)
+  au <- run_estep(f, cp, logZMode = 2L, maxit = 0L)
+  tb <- run_estep(f, cp, logZMode = 1L, maxit = 0L)
+  old <- run_estep(f, cp, logZMode = 1L, maxit = 0L, logZMaxhS = 0)   # 1.7.0
+  ## 341 documents: about 6,800 evaluations, so a table of more than 1,705
+  ## nodes is not worth building; topic 1 needs (range / 0.00025) nodes
+  expect_equal(au$logZExactTopics, 1)
+  expect_true(is.na(au$logZSpacingByTopic[1]))
+  expect_equal(tb$logZExactTopics, 0)
+  expect_equal(au$elbo, ex$elbo, tolerance = 1e-10)
+  expect_equal(tb$elbo, ex$elbo, tolerance = 5e-9)
+  expect_gt(abs(old$elbo - ex$elbo), 100 * abs(tb$elbo - ex$elbo))
+})

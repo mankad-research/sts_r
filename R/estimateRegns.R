@@ -25,12 +25,25 @@
 #' @details The regressions account for uncertainty in the latent document-level
 #' variables by the method of composition: \code{nsims} times, the prevalence
 #' and sentiment-discourse values of every document are drawn from a normal
-#' distribution centred at their estimates with covariance \code{object$sigma},
-#' each outcome is regressed on the covariates, and \code{nsims_se} draws are
-#' taken from each fitted regression's sampling distribution. Estimates and
-#' standard errors are the mean and standard deviation of the pooled draws.
-#' Results depend on the random number generator; call \code{set.seed()} first
-#' for reproducible tables.
+#' distribution centred at their estimates, each outcome is regressed on the
+#' covariates, and \code{nsims_se} draws are taken from each fitted
+#' regression's sampling distribution. Estimates and standard errors are the
+#' mean and standard deviation of the pooled draws. Results depend on the
+#' random number generator; call \code{set.seed()} first for reproducible
+#' tables.
+#'
+#' The draws share one covariance matrix, the average of the documents'
+#' variational (Laplace) covariances. It is computed as
+#' \eqn{\Sigma - \frac{1}{D}\sum_d (\alpha_d - \mu_d)(\alpha_d - \mu_d)^\top}{Sigma - (1/D) sum_d (alpha_d - mu_d)(alpha_d - mu_d)'},
+#' since the M-step sets \eqn{\Sigma}{Sigma} to the average variational
+#' covariance plus that average outer product. This is the "Global"
+#' approximation that \pkg{stm}'s \code{estimateEffect()} uses (see
+#' \code{stm::thetaPosterior()}). sts 1.7.0 and earlier drew with
+#' \code{object$sigma}, the prior covariance, which also contains the spread
+#' of the documents around their fitted means and so overstates the
+#' uncertainty: their standard errors are larger. The internal option
+#' \code{options(sts.regnsSigma = "prior")} restores that behaviour, to
+#' reproduce earlier tables.
 #'
 #' @return An object of class \code{"STSRegns"}: a list of \eqn{2K}
 #' coefficient tables (columns Estimate, Std. Error, t value, Pr(>|t|)), named
@@ -56,7 +69,7 @@
 estimateRegns = function(object, prevalence_sentiment, corpus, nsims = 25, nsims_se = 250) {
   .check_sts(object)
   alpha <- object$alpha
-  sigma <- object$sigma
+  sigma <- .regns_sigma(object)
 
   if (inherits(prevalence_sentiment, "formula")) {
     if (is.null(corpus$meta)) stop("'corpus' has no $meta data frame for the formula.", call. = FALSE)
@@ -120,6 +133,28 @@ estimateRegns = function(object, prevalence_sentiment, corpus, nsims = 25, nsims
   names(tables) <- names(vcovs) <- labs
   structure(tables, class = "STSRegns", vcov = vcovs, df.residual = rdf, K = K,
             nsims = nsims, nsims_se = nsims_se)
+}
+
+## Covariance of the draws in estimateRegns(): the average variational
+## covariance, Sigma - crossprod(alpha - mu) / D, as in stm's thetaPosterior
+## (type = "Global").  opt.sigma() sets Sigma = (crossprod(alpha - mu) + nu) / D
+## with nu the sum of the documents' covariances (-H_d)^-1, so this recovers
+## nu / D up to rounding.  options(sts.regnsSigma = "prior") gives the prior
+## covariance object$sigma, as sts <= 1.7.0 used.
+.regns_sigma <- function(object) {
+  opt <- getOption("sts.regnsSigma", "variational")
+  if (!is.character(opt) || length(opt) != 1L || !opt %in% c("variational", "prior"))
+    stop('option sts.regnsSigma must be "variational" (default) or "prior"', call. = FALSE)
+  if (identical(opt, "prior")) return(object$sigma)
+  mu <- object$mu
+  if (is.null(mu) || !identical(dim(mu), rev(dim(object$alpha)))) {
+    warning("The fit has no fitted means (mu) matching alpha; using the prior covariance ",
+            "object$sigma, as sts 1.7.0 and earlier did.", call. = FALSE)
+    return(object$sigma)
+  }
+  dev <- object$alpha - t(mu)
+  S <- object$sigma - crossprod(dev) / nrow(dev)
+  (S + t(S)) / 2
 }
 
 ## Which tables of an STSRegns object a (topic, type) selection refers to.

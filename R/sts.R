@@ -366,8 +366,9 @@ sts = function(prevalence_sentiment, initializationVar, corpus, K, maxIter = 500
   ## objective evaluation (roughly 20 per document per E-step in practice),
   ## while the table sweeps V once per topic per grid node and then
   ## interpolates.  The table therefore pays off when 20*D comfortably
-  ## exceeds the node count, which is a statement about D alone -- V and K
-  ## cancel.  "auto" requires a 4x margin before switching.
+  ## exceeds the node count, which depends on D and on the initial alpha
+  ## range (decided once, here) -- V and K cancel.  "auto" requires a 4x
+  ## margin before switching.
   alpha_s_rng <- range(alpha.est[, 1:K + K - 1])
   logZnodes_est <- ceiling((diff(alpha_s_rng) + 2 * logZMargin) / logZSpacing) + 1
   evals_est <- 20 * D

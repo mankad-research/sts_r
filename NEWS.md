@@ -12,9 +12,11 @@
   log-determinant. That quantity is not the Laplace approximation of the
   ELBO: it grows without limit as Sigma shrinks, and it often fell in the
   (Gamma, Sigma) update. The Proposition 1 bound cannot fall in the Sigma
-  update, and it did not fall in the (Gamma, Sigma) update in any run we
-  traced. (Gamma is updated by stm's variational linear regression, which
-  shrinks the coefficients slightly, so this is not guaranteed.)
+  update. Gamma is updated by stm's variational linear regression, which
+  shrinks the coefficients, so the joint update can lower it: it did not in
+  the default fits we traced, but did in a diagnostic run with the
+  least-penalized kappa, where least squares for Gamma removed every such
+  decrease.
 * The estimates at any given iteration are unchanged, but the reported
   values, the iteration at which a fit stops and the iterate it returns can
   differ from 1.7.0. `diagnostics$elboLap` is the new Laplace term.
